@@ -200,7 +200,7 @@ export default function Routers() {
                         <button onClick={() => sync(r.id)} disabled={syncing === r.id} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 disabled:opacity-50 transition-colors" title="Sincronizar">
                           <RefreshCw className={`w-4 h-4 ${syncing === r.id ? 'animate-spin' : ''}`} />
                         </button>
-                        <button onClick={() => testDiag(r.id)} disabled={testing === r.id} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 disabled:opacity-50 transition-colors" title="Diagnóstico TCP">
+                        <button onClick={() => testDiag(r.id)} disabled={testing === r.id} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 disabled:opacity-50 transition-colors" title="Probar Conexion">
                           <Stethoscope className={`w-4 h-4 ${testing === r.id ? 'animate-pulse' : ''}`} />
                         </button>
                         <button onClick={() => navigate(`/routers/${r.id}/edit`)} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 transition-colors" title="Editar">
