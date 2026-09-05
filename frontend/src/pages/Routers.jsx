@@ -132,7 +132,7 @@ export default function Routers() {
           </div>
           <div className="space-y-2 text-sm">
             <div className="flex gap-2"><span className="text-slate-500 w-28">Destino:</span><span className="font-mono text-slate-700">{diag.host}:{diag.port} {diag.use_tls ? '(TLS)' : '(sin TLS)'}</span></div>
-            <div className="flex gap-2"><span className="text-slate-500 w-28">TCP crudo:</span>
+            <div className="flex gap-2"><span className="text-slate-500 w-28">Ping TCP:</span>
               {diag.tcp?.ok
                 ? <span className="text-emerald-600 font-medium">✓ Conectado en {diag.tcp.ms}ms</span>
                 : <span className="text-rose-600 font-medium">✗ {diag.tcp?.error || 'Falló'}</span>}
