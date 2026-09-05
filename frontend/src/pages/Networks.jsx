@@ -27,11 +27,20 @@ const CIDR_OPTIONS = [
   { cidr: 30, label: "30 (255.255.255.252 - 2 hosts, 4 IP)" },
 ];
 
-const extractArray = (resData, key) => {
+// Extractor universal de arrays para cualquier formato JSON de respuesta
+const extractArray = (resData) => {
+  if (!resData) return [];
   if (Array.isArray(resData)) return resData;
-  if (resData && Array.isArray(resData[key])) return resData[key];
-  if (resData && Array.isArray(resData.data)) return resData.data;
-  if (resData && Array.isArray(resData.rows)) return resData.rows;
+  if (typeof resData === "object") {
+    for (const key of ["routers", "networks", "data", "rows", "items", "result", "results"]) {
+      if (Array.isArray(resData[key])) return resData[key];
+    }
+    if (resData.data && typeof resData.data === "object") {
+      for (const key of ["routers", "networks", "rows", "items"]) {
+        if (Array.isArray(resData.data[key])) return resData.data[key];
+      }
+    }
+  }
   return [];
 };
 
@@ -61,22 +70,30 @@ export default function Networks() {
     };
   };
 
+  const fetchRouters = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/routers`, { headers: getHeaders() });
+      if (!res.ok) return [];
+      const raw = await res.json();
+      const list = extractArray(raw);
+      setRouters(list);
+      return list;
+    } catch (e) {
+      console.error("Error al obtener routers:", e);
+      return [];
+    }
+  };
+
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [routersRes, netsRes] = await Promise.all([
-        fetch(`${API_BASE}/routers`, { headers: getHeaders() }),
+      const [currentRouters, netsRes] = await Promise.all([
+        fetchRouters(),
         fetch(`${API_BASE}/networks`, { headers: getHeaders() })
       ]);
 
-      const routersRaw = routersRes.ok ? await routersRes.json() : [];
       const netsRaw = netsRes.ok ? await netsRes.json() : [];
-
-      const parsedRouters = extractArray(routersRaw, "routers");
-      const parsedNets = extractArray(netsRaw, "networks");
-
-      setRouters(parsedRouters);
-      setNetworks(parsedNets);
+      setNetworks(extractArray(netsRaw));
     } catch (error) {
       console.error("Error al obtener datos:", error);
     } finally {
@@ -103,21 +120,29 @@ export default function Networks() {
     return filteredNetworks.slice(start, start + pageSize);
   }, [filteredNetworks, currentPage, pageSize]);
 
-  const openModal = (net = null) => {
+  const openModal = async (net = null) => {
+    // Al abrir modal refrescamos lista de routers actualizados
+    const currentRouters = await fetchRouters();
+
     if (net) {
       setEditingNet(net);
+      const netRouterId = String(net.router_id ?? net.routerId ?? (currentRouters[0]?.id ?? currentRouters[0]?._id ?? ""));
       setFormData({
         name: net.name || "",
-        router_id: String(net.router_id || net.routerId || (routers[0]?.id || "")),
+        router_id: netRouterId,
         network: net.network || "",
         cidr: net.cidr || 24,
         type: net.type || "ESTÁTICO",
       });
     } else {
       setEditingNet(null);
+      const defaultRouterId = currentRouters.length > 0 
+        ? String(currentRouters[0].id ?? currentRouters[0]._id ?? "") 
+        : "";
+
       setFormData({
         name: "",
-        router_id: routers.length > 0 ? String(routers[0].id) : "",
+        router_id: defaultRouterId,
         network: "",
         cidr: 24,
         type: "ESTÁTICO",
@@ -137,7 +162,7 @@ export default function Networks() {
       const parsedRouterId = parseInt(formData.router_id, 10);
 
       if (!parsedRouterId || isNaN(parsedRouterId)) {
-        alert("Seleccione un router válido o registre uno primero.");
+        alert("Seleccione un router válido.");
         return;
       }
 
@@ -274,7 +299,7 @@ export default function Networks() {
                   const totalHosts = getHostsCount(net.cidr);
                   const usedHosts = net.used_ips || net.usedIps || 0;
                   const percentage = ((usedHosts / totalHosts) * 100).toFixed(1);
-                  const router = routers.find((r) => String(r.id) === String(net.router_id || net.routerId));
+                  const router = routers.find((r) => String(r.id ?? r._id) === String(net.router_id ?? net.routerId));
 
                   return (
                     <tr key={net.id || index} className="hover:bg-gray-50 transition-colors">
@@ -293,7 +318,9 @@ export default function Networks() {
                         </div>
                       </td>
                       <td className="p-2.5 border-r border-gray-200">{net.cidr}</td>
-                      <td className="p-2.5 border-r border-gray-200">{router ? (router.name || router.nombre || router.ip) : (net.router_name || net.routerName || "Sin router")}</td>
+                      <td className="p-2.5 border-r border-gray-200">
+                        {router ? (router.name || router.nombre || router.alias || router.identity || router.ip) : (net.router_name || net.routerName || "Sin router")}
+                      </td>
                       <td className="p-2.5 border-r border-gray-200">
                         <span className="bg-[#007a87] text-white text-[10px] px-2 py-0.5 rounded font-semibold uppercase">
                           {net.type || "ESTÁTICO"}
@@ -380,17 +407,15 @@ export default function Networks() {
                       className="w-full border border-gray-300 rounded px-2.5 py-1.5 bg-white text-gray-700 focus:outline-none focus:border-blue-500"
                     >
                       <option value="">Seleccionar...</option>
-                      {routers.length === 0 ? (
-                        <option value="" disabled>
-                          -- Sin routers registrados en BD --
-                        </option>
-                      ) : (
-                        routers.map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {r.name || r.nombre || r.ip || `Router ID ${r.id}`}
+                      {routers.map((r) => {
+                        const rId = String(r.id ?? r._id ?? r.router_id ?? "");
+                        const rName = r.name || r.nombre || r.alias || r.identity || r.ip || `Router ID ${rId}`;
+                        return (
+                          <option key={rId} value={rId}>
+                            {rName}
                           </option>
-                        ))
-                      )}
+                        );
+                      })}
                     </select>
                   </div>
                 </div>
