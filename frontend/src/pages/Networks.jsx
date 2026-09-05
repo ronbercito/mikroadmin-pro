@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { api } from "../api/client";
 import {
   Plus,
   RefreshCw,
@@ -15,6 +14,9 @@ import {
   List,
   Grid
 } from "lucide-react";
+
+// Utiliza la variable de entorno del instalador (/admin/api)
+const API_BASE = import.meta.env.VITE_API_URL || "/admin/api";
 
 const CIDR_OPTIONS = [
   { cidr: 24, label: "24 (255.255.255.0 - 254 hosts, 256 IP)" },
@@ -44,29 +46,27 @@ export default function Networks() {
     type: "ESTÁTICO",
   });
 
+  const getHeaders = () => {
+    const token = localStorage.getItem("token") || localStorage.getItem("auth_token") || "";
+    return {
+      "Content-Type": "application/json",
+      "Authorization": token ? `Bearer ${token}` : ""
+    };
+  };
+
   const fetchData = async () => {
     setLoading(true);
     try {
-      const routersRes = await api.routers.list().catch(() => []);
-      const loadedRouters = Array.isArray(routersRes) ? routersRes : [];
-      setRouters(loadedRouters);
+      const [routersRes, netsRes] = await Promise.all([
+        fetch(`${API_BASE}/routers`, { headers: getHeaders() }),
+        fetch(`${API_BASE}/networks`, { headers: getHeaders() })
+      ]);
 
-      let netsRes = [];
-      if (api.networks?.list) {
-        netsRes = await api.networks.list().catch(() => []);
-      } else if (api.get) {
-        netsRes = await api.get("/networks").catch(() => []);
-      } else {
-        const token = localStorage.getItem("token") || localStorage.getItem("auth_token");
-        const res = await fetch("/api/networks", {
-          headers: {
-            "Authorization": token ? `Bearer ${token}` : "",
-            "Content-Type": "application/json"
-          }
-        });
-        if (res.ok) netsRes = await res.json();
-      }
-      setNetworks(Array.isArray(netsRes) ? netsRes : []);
+      const routersData = routersRes.ok ? await routersRes.json() : [];
+      const netsData = netsRes.ok ? await netsRes.json() : [];
+
+      setRouters(Array.isArray(routersData) ? routersData : []);
+      setNetworks(Array.isArray(netsData) ? netsData : []);
     } catch (error) {
       console.error("Error al obtener datos:", error);
     } finally {
@@ -98,14 +98,14 @@ export default function Networks() {
       setEditingNet(net);
       setFormData({
         name: net.name || "",
-        router_id: net.router_id ? String(net.router_id) : "",
+        router_id: net.router_id || net.routerId ? String(net.router_id || net.routerId) : "",
         network: net.network || "",
         cidr: net.cidr || 24,
         type: net.type || "ESTÁTICO",
       });
     } else {
       setEditingNet(null);
-      const defaultRouterId = routers.length > 0 ? String(routers[0].id || routers[0]._id || "") : "";
+      const defaultRouterId = routers.length > 0 ? String(routers[0].id) : "";
       setFormData({
         name: "",
         router_id: defaultRouterId,
@@ -125,7 +125,6 @@ export default function Networks() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      // Normalización de datos para la BD
       const parsedRouterId = parseInt(formData.router_id, 10);
       
       if (isNaN(parsedRouterId)) {
@@ -133,78 +132,48 @@ export default function Networks() {
         return;
       }
 
+      // Payload compatible con Prisma ORM (acepta camelCase y snake_case)
       const payload = {
         name: formData.name.trim(),
         router_id: parsedRouterId,
+        routerId: parsedRouterId,
         network: formData.network.trim(),
-        cidr: Number(formData.cidr),
+        cidr: parseInt(formData.cidr, 10),
         type: formData.type
       };
 
-      if (editingNet) {
-        if (api.networks?.update) {
-          await api.networks.update(editingNet.id, payload);
-        } else if (api.put) {
-          await api.put(`/networks/${editingNet.id}`, payload);
-        } else {
-          const token = localStorage.getItem("token") || localStorage.getItem("auth_token");
-          const res = await fetch(`/api/networks/${editingNet.id}`, {
-            method: "PUT",
-            headers: {
-              "Authorization": token ? `Bearer ${token}` : "",
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(payload),
-          });
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.message || "Error al actualizar la red en la base de datos");
-          }
-        }
-      } else {
-        if (api.networks?.create) {
-          await api.networks.create(payload);
-        } else if (api.post) {
-          await api.post("/networks", payload);
-        } else {
-          const token = localStorage.getItem("token") || localStorage.getItem("auth_token");
-          const res = await fetch("/api/networks", {
-            method: "POST",
-            headers: {
-              "Authorization": token ? `Bearer ${token}` : "",
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(payload),
-          });
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.message || "Error al guardar en la base de datos");
-          }
-        }
+      const url = editingNet
+        ? `${API_BASE}/networks/${editingNet.id}`
+        : `${API_BASE}/networks`;
+      const method = editingNet ? "PUT" : "POST";
+
+      const res = await fetch(url, {
+        method,
+        headers: getHeaders(),
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errorDetail = await res.json().catch(() => ({}));
+        throw new Error(errorDetail.message || errorDetail.error || "Error al procesar en la base de datos");
       }
 
       closeModal();
       fetchData();
     } catch (error) {
       console.error("Error al guardar red:", error);
-      alert(error.message || "Error al guardar la red IPv4 en la base de datos");
+      alert(error.message || "Error al guardar la red IPv4 en MariaDB");
     }
   };
 
   const handleDelete = async (id, name) => {
     if (window.confirm(`¿Está seguro de eliminar la red "${name}"?`)) {
       try {
-        if (api.networks?.delete) {
-          await api.networks.delete(id);
-        } else if (api.delete) {
-          await api.delete(`/networks/${id}`);
-        } else {
-          const token = localStorage.getItem("token") || localStorage.getItem("auth_token");
-          await fetch(`/api/networks/${id}`, {
-            method: "DELETE",
-            headers: { "Authorization": token ? `Bearer ${token}` : "" }
-          });
-        }
+        const res = await fetch(`${API_BASE}/networks/${id}`, {
+          method: "DELETE",
+          headers: getHeaders()
+        });
+        if (!res.ok) throw new Error("Error al eliminar");
         fetchData();
       } catch (error) {
         alert("Error al eliminar la red");
@@ -213,7 +182,7 @@ export default function Networks() {
   };
 
   const getHostsCount = (cidr) => {
-    const total = Math.pow(2, 32 - parseInt(cidr || 24));
+    const total = Math.pow(2, 32 - parseInt(cidr || 24, 10));
     return total > 2 ? total - 2 : total;
   };
 
@@ -221,7 +190,7 @@ export default function Networks() {
     <div className="w-full font-sans text-gray-700 bg-gray-100 min-h-screen p-4">
       <div className="bg-white rounded-t shadow-sm border border-gray-200 overflow-hidden">
         
-        {/* Header */}
+        {/* Header Superior */}
         <div className="bg-[#0267a5] text-white px-4 py-2.5 flex items-center justify-between">
           <span className="font-medium text-sm">Redes IPv4</span>
           <div className="flex items-center space-x-2 text-white/80">
@@ -231,7 +200,7 @@ export default function Networks() {
           </div>
         </div>
 
-        {/* Toolbar */}
+        {/* Toolbar Superior */}
         <div className="p-3 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center space-x-2">
             <select
@@ -268,7 +237,7 @@ export default function Networks() {
           </div>
         </div>
 
-        {/* Tabla */}
+        {/* Tabla principal */}
         <div className="overflow-x-auto">
           <table className="w-full text-xs text-left border-collapse">
             <thead>
@@ -295,9 +264,9 @@ export default function Networks() {
               ) : (
                 paginatedNetworks.map((net, index) => {
                   const totalHosts = getHostsCount(net.cidr);
-                  const usedHosts = net.used_ips || 0;
+                  const usedHosts = net.used_ips || net.usedIps || 0;
                   const percentage = ((usedHosts / totalHosts) * 100).toFixed(1);
-                  const router = routers.find((r) => String(r.id || r._id) === String(net.router_id));
+                  const router = routers.find((r) => String(r.id) === String(net.router_id || net.routerId));
 
                   return (
                     <tr key={net.id || index} className="hover:bg-gray-50 transition-colors">
@@ -316,7 +285,7 @@ export default function Networks() {
                         </div>
                       </td>
                       <td className="p-2.5 border-r border-gray-200">{net.cidr}</td>
-                      <td className="p-2.5 border-r border-gray-200">{router ? (router.name || router.nombre) : net.router_name || "Sin router"}</td>
+                      <td className="p-2.5 border-r border-gray-200">{router ? router.name : net.router_name || "Sin router"}</td>
                       <td className="p-2.5 border-r border-gray-200">
                         <span className="bg-[#007a87] text-white text-[10px] px-2 py-0.5 rounded font-semibold uppercase">
                           {net.type || "ESTÁTICO"}
@@ -338,7 +307,7 @@ export default function Networks() {
           </table>
         </div>
 
-        {/* Paginación */}
+        {/* Footer con Paginación */}
         <div className="p-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
           <div>
             Mostrando de {filteredNetworks.length > 0 ? (currentPage - 1) * pageSize + 1 : 0} al{" "}
@@ -364,7 +333,7 @@ export default function Networks() {
         </div>
       </div>
 
-      {/* Modal */}
+      {/* Modal Nueva / Editar Red */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden">
@@ -404,8 +373,8 @@ export default function Networks() {
                     >
                       <option value="">Seleccionar...</option>
                       {routers.map((r) => (
-                        <option key={r.id || r._id} value={r.id || r._id}>
-                          {r.name || r.nombre || r.ip || `Router ${r.id}`}
+                        <option key={r.id} value={r.id}>
+                          {r.name || r.ip || `Router ${r.id}`}
                         </option>
                       ))}
                     </select>
