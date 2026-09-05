@@ -10,6 +10,7 @@ import cutoffRoutes from './routes/cutoff.js';
 import infoRoutes from './routes/info.js';
 import trafficFlowRoutes from './routes/traffic-flow.js';
 import securityAltRoutes from './routes/security-alt.js';
+import diagnosticRoutes from './routes/diagnostic.js';
 import { startCron } from './jobs/cron.js';
 
 const app = express();
@@ -26,6 +27,7 @@ app.use('/api/cutoff', cutoffRoutes);
 app.use('/api/routers', infoRoutes);
 app.use('/api/routers', trafficFlowRoutes);
 app.use('/api/routers', securityAltRoutes);
+app.use('/api/routers', diagnosticRoutes);
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => { console.log(`API MikroAdmin en http://localhost:${PORT}`); startCron(); });

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
-import { Plus, RefreshCw, Router as RouterIcon, Trash2, Pencil, Users, X } from 'lucide-react';
+import { Plus, RefreshCw, Router as RouterIcon, Trash2, Pencil, Users, X, Stethoscope } from 'lucide-react';
 
 const emptyForm = { name: '', host: '', api_port: 8728, use_tls: false, username: '', password: '', location: '', notes: '' };
 const speedLabels = {
@@ -21,6 +21,9 @@ export default function Routers() {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(null);
+  const [syncError, setSyncError] = useState(null);
+  const [testing, setTesting] = useState(null);
+  const [diag, setDiag] = useState(null);
 
   useEffect(() => { load(); }, []);
 
@@ -58,8 +61,28 @@ export default function Routers() {
 
   async function sync(id) {
     setSyncing(id);
-    try { await api.routers.sync(id); await load(); } catch (e) { console.error(e); }
+    setSyncError(null);
+    try {
+      const res = await api.routers.sync(id);
+      if (res?.error) setSyncError(`Router ${id}: ${res.error}`);
+      await load();
+    } catch (e) {
+      setSyncError(`Router ${id}: ${e.message}`);
+      console.error(e);
+    }
     setSyncing(null);
+  }
+
+  async function testDiag(id) {
+    setTesting(id);
+    setDiag(null);
+    try {
+      const res = await api.routers.test(id);
+      setDiag(res);
+    } catch (e) {
+      setDiag({ tcp: { ok: false, error: e.message } });
+    }
+    setTesting(null);
   }
 
   return (
@@ -68,11 +91,42 @@ export default function Routers() {
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Routers MikroTik</h1>
           <p className="text-sm text-slate-500 mt-1">Gestiona tus equipos y verifica la conexión</p>
+          {syncError && (
+            <div className="mt-2 text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+              <strong>Error de conexión:</strong> {syncError}
+            </div>
+          )}
         </div>
         <button onClick={openNew} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-slate-900 text-white text-sm font-medium hover:bg-slate-800 transition-colors">
           <Plus className="w-4 h-4" /> Agregar router
         </button>
       </div>
+
+      {diag && (
+        <div className="mb-4 bg-white border border-slate-200 rounded-lg p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-slate-700">Diagnóstico de conexión TCP</h3>
+            <button onClick={() => setDiag(null)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+          </div>
+          <div className="space-y-2 text-sm">
+            <div className="flex gap-2"><span className="text-slate-500 w-24">Destino:</span><span className="font-mono text-slate-700">{diag.host}:{diag.port} {diag.use_tls ? '(TLS)' : '(sin TLS)'}</span></div>
+            <div className="flex gap-2"><span className="text-slate-500 w-24">TCP crudo:</span>
+              {diag.tcp?.ok
+                ? <span className="text-emerald-600 font-medium">✓ Conectado en {diag.tcp.ms}ms</span>
+                : <span className="text-rose-600 font-medium">✗ {diag.tcp?.error || 'Falló'}</span>}
+            </div>
+            <div className="flex gap-2"><span className="text-slate-500 w-24">Hora servidor:</span><span className="font-mono text-slate-600 text-xs">{diag.server_time}</span></div>
+          </div>
+          {!diag.tcp?.ok && (
+            <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+              <strong>Posible causa:</strong> El servidor Linux donde corre MikroAdmin no puede alcanzar la IP del router.
+              Verifica que el servidor esté en la misma red que el MikroTik o que haya ruta hacia {diag.host}.
+              Ejecuta desde tu servidor: <code className="bg-amber-100 px-1 rounded">ping {diag.host}</code> y
+              <code className="bg-amber-100 px-1 rounded ml-1">nc -zv {diag.host} {diag.port}</code>
+            </div>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <div className="animate-pulse space-y-3">
@@ -123,6 +177,9 @@ export default function Routers() {
                     <div className="flex items-center justify-center gap-1">
                       <button onClick={() => sync(r.id)} disabled={syncing === r.id} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 disabled:opacity-50 transition-colors" title="Sincronizar">
                         <RefreshCw className={`w-4 h-4 ${syncing === r.id ? 'animate-spin' : ''}`} />
+                      </button>
+                      <button onClick={() => testDiag(r.id)} disabled={testing === r.id} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 disabled:opacity-50 transition-colors" title="Diagnóstico TCP">
+                        <Stethoscope className={`w-4 h-4 ${testing === r.id ? 'animate-pulse' : ''}`} />
                       </button>
                       <button onClick={() => navigate(`/routers/${r.id}/edit`)} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 transition-colors" title="Editar">
                         <Pencil className="w-4 h-4" />
