@@ -1,16 +1,15 @@
-import React, { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { base44 } from "@/api/base44Client";
-import { Plus, RefreshCw, Router as RouterIcon, Trash2, Pencil, Users, Wrench, X, Eye, EyeOff } from "lucide-react";
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { api } from '../api/client';
+import { Plus, RefreshCw, Router as RouterIcon, Trash2, Pencil, Users, X, Stethoscope } from 'lucide-react';
 
-const emptyForm = { name: "", host: "", api_port: 8728, use_tls: false, username: "", password: "", location: "", notes: "" };
-
+const emptyForm = { name: '', host: '', api_port: 8728, use_tls: false, username: '', password: '', location: '', notes: '' };
 const speedLabels = {
-  simple_queues: "Colas Simples",
-  pcq_addresslist: "PCQ + Addresslist",
-  simple_queues_dynamic: "Colas Simples Dinámicas",
-  dhcp_lease_dynamic: "DHCP Lease Dinámicas",
-  none: "Ninguno",
+  simple_queues: 'Colas Simples',
+  pcq_addresslist: 'PCQ + Addresslist',
+  simple_queues_dynamic: 'Colas Simples Dinámicas',
+  dhcp_lease_dynamic: 'DHCP Lease Dinámicas',
+  none: 'Ninguno',
 };
 
 export default function Routers() {
@@ -20,73 +19,70 @@ export default function Routers() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
-  const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(null);
-  const [showPass, setShowPass] = useState(false);
+  const [syncError, setSyncError] = useState(null);
+  const [testing, setTesting] = useState(null);
+  const [diag, setDiag] = useState(null);
 
   useEffect(() => { load(); }, []);
 
   async function load() {
     setLoading(true);
     try {
-      const [data, clients] = await Promise.all([
-        base44.entities.Router.list(),
-        base44.entities.Client.list(),
-      ]);
+      const [data, clients] = await Promise.all([api.routers.list(), api.clients.list()]);
       const counts = {};
-      (clients || []).forEach((c) => {
-        if (c.router_id) counts[c.router_id] = (counts[c.router_id] || 0) + 1;
-      });
+      (clients || []).forEach((c) => { if (c.router_id) counts[c.router_id] = (counts[c.router_id] || 0) + 1; });
       setClientCounts(counts);
       setRouters(data || []);
     } catch (e) { console.error(e); }
     setLoading(false);
   }
 
-  function openNew() { setForm(emptyForm); setEditingId(null); setShowForm(true); }
-  function openEdit(r) {
-    setForm({ name: r.name, host: r.host, api_port: r.api_port || 8728, use_tls: r.use_tls === true, username: r.username, password: r.password || "", location: r.location || "", notes: r.notes || "" });
-    setEditingId(r.id); setShowForm(true);
-  }
+  function openNew() { setForm(emptyForm); setShowForm(true); }
 
   async function save(e) {
     e.preventDefault();
     setSaving(true);
     try {
-      let created;
-      if (editingId) {
-        await base44.entities.Router.update(editingId, form);
-        setShowForm(false);
-        load();
-        sync(editingId);
-      } else {
-        created = await base44.entities.Router.create(form);
-        setShowForm(false);
-        await load();
-        if (created?.id) sync(created.id);
-      }
+      const created = await api.routers.create(form);
+      setShowForm(false);
+      await load();
+      if (created?.id) sync(created.id);
     } catch (e) { console.error(e); }
     setSaving(false);
   }
 
   async function remove(id) {
-    if (!confirm("¿Eliminar este router? Los clientes asignados quedarán sin router.")) return;
-    await base44.entities.Router.delete(id);
+    if (!confirm('¿Eliminar este router? Los clientes asignados quedarán sin router.')) return;
+    await api.routers.delete(id);
     load();
   }
 
   async function sync(id) {
     setSyncing(id);
+    setSyncError(null);
     try {
-      const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error("Timeout")), 30000));
-      await Promise.race([
-        base44.functions.invoke("syncRouter", { router_id: id }),
-        timeout,
-      ]);
+      const res = await api.routers.sync(id);
+      if (res?.error) setSyncError(`Router ${id}: ${res.error}`);
       await load();
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      setSyncError(`Router ${id}: ${e.message}`);
+      console.error(e);
+    }
     setSyncing(null);
+  }
+
+  async function testDiag(id) {
+    setTesting(id);
+    setDiag(null);
+    try {
+      const res = await api.routers.test(id);
+      setDiag(res);
+    } catch (e) {
+      setDiag({ tcp: { ok: false, error: e.message }, api: { ok: false, error: e.message } });
+    }
+    setTesting(null);
   }
 
   return (
@@ -95,11 +91,50 @@ export default function Routers() {
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Routers MikroTik</h1>
           <p className="text-sm text-slate-500 mt-1">Gestiona tus equipos y verifica la conexión</p>
+          {syncError && (
+            <div className="mt-2 text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+              <strong>Error de conexión:</strong> {syncError}
+            </div>
+          )}
         </div>
         <button onClick={openNew} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-slate-900 text-white text-sm font-medium hover:bg-slate-800 transition-colors">
           <Plus className="w-4 h-4" /> Agregar router
         </button>
       </div>
+
+      {diag && (
+        <div className="mb-4 bg-white border border-slate-200 rounded-lg p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-slate-700">Diagnóstico de conexión</h3>
+            <button onClick={() => setDiag(null)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+          </div>
+          <div className="space-y-2 text-sm">
+            <div className="flex gap-2"><span className="text-slate-500 w-28">Destino:</span><span className="font-mono text-slate-700">{diag.host}:{diag.port} {diag.use_tls ? '(TLS)' : '(sin TLS)'}</span></div>
+            <div className="flex gap-2"><span className="text-slate-500 w-28">TCP crudo:</span>
+              {diag.tcp?.ok
+                ? <span className="text-emerald-600 font-medium">✓ Conectado en {diag.tcp.ms}ms</span>
+                : <span className="text-rose-600 font-medium">✗ {diag.tcp?.error || 'Falló'}</span>}
+            </div>
+            <div className="flex gap-2"><span className="text-slate-500 w-28">Login API:</span>
+              {diag.api?.ok
+                ? <span className="text-emerald-600 font-medium">✓ Autenticado — {diag.api.board} v{diag.api.version}</span>
+                : <span className="text-rose-600 font-medium">✗ {diag.api?.error || 'Falló'}</span>}
+            </div>
+            <div className="flex gap-2"><span className="text-slate-500 w-28">Hora servidor:</span><span className="font-mono text-slate-600 text-xs">{diag.server_time}</span></div>
+          </div>
+          {diag.tcp?.ok && !diag.api?.ok && (
+            <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+              <strong>El puerto TCP está abierto pero el login API falló.</strong> Causas comunes:
+              <ul className="list-disc list-inside mt-1 space-y-0.5">
+                <li>El puerto <strong>{diag.port}</strong> no es el puerto API de MikroTik (debe ser <strong>8728</strong> sin TLS o <strong>8729</strong> con TLS)</li>
+                <li>TLS está {diag.use_tls ? 'activado' : 'desactivado'} — verifica que coincida con la configuración del router</li>
+                <li>Usuario o contraseña incorrectos</li>
+                <li>El servicio API no está habilitado en MikroTik (IP → Services → api)</li>
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <div className="animate-pulse space-y-3">
@@ -133,11 +168,11 @@ export default function Routers() {
                     <button onClick={() => navigate(`/routers/${r.id}/edit`)} className="text-sm font-medium text-[#007BFF] hover:underline">
                       {r.name}
                     </button>
-                    <p className="text-xs text-[#f39c12] mt-0.5">API + {speedLabels[r.speed_control] || "Colas simples"}</p>
+                    <p className="text-xs text-[#f39c12] mt-0.5">API + {speedLabels[r.speed_control] || 'Colas Simples'}</p>
                   </td>
                   <td className="px-4 py-3.5 text-sm text-slate-600">{r.host}</td>
-                  <td className="px-4 py-3.5 text-sm text-slate-600">{r.model || "—"}</td>
-                  <td className="px-4 py-3.5 text-sm text-slate-600">{r.ros_version || "—"}</td>
+                  <td className="px-4 py-3.5 text-sm text-slate-600">{r.model || '—'}</td>
+                  <td className="px-4 py-3.5 text-sm text-slate-600">{r.ros_version || '—'}</td>
                   <td className="px-4 py-3.5 text-center">
                     <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-slate-200 text-slate-600 text-xs font-medium">
                       {clientCounts[r.id] || 0}
@@ -149,15 +184,15 @@ export default function Routers() {
                   <td className="px-4 py-3.5">
                     <div className="flex items-center justify-center gap-1">
                       <button onClick={() => sync(r.id)} disabled={syncing === r.id} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 disabled:opacity-50 transition-colors" title="Sincronizar">
-                        <RefreshCw className={`w-4 h-4 ${syncing === r.id ? "animate-spin" : ""}`} />
+                        <RefreshCw className={`w-4 h-4 ${syncing === r.id ? 'animate-spin' : ''}`} />
+                      </button>
+                      <button onClick={() => testDiag(r.id)} disabled={testing === r.id} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 disabled:opacity-50 transition-colors" title="Diagnóstico TCP">
+                        <Stethoscope className={`w-4 h-4 ${testing === r.id ? 'animate-pulse' : ''}`} />
                       </button>
                       <button onClick={() => navigate(`/routers/${r.id}/edit`)} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 transition-colors" title="Editar">
                         <Pencil className="w-4 h-4" />
                       </button>
-                      <button onClick={() => navigate(`/routers/${r.id}/edit`)} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 transition-colors" title="Herramientas">
-                        <Wrench className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => navigate("/clients")} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 transition-colors" title="Clientes">
+                      <button onClick={() => navigate('/clients')} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 transition-colors" title="Clientes">
                         <Users className="w-4 h-4" />
                       </button>
                       <button onClick={() => remove(r.id)} className="p-1.5 rounded-md text-rose-500 hover:bg-rose-50 transition-colors" title="Eliminar">
@@ -176,7 +211,7 @@ export default function Routers() {
         <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4" onClick={() => setShowForm(false)}>
           <div className="bg-white rounded-lg shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 bg-[#F8F9FA] border-b border-slate-200">
-              <h2 className="text-base font-semibold text-[#333333]">{editingId ? "Editar Router" : "Nuevo Router"}</h2>
+              <h2 className="text-base font-semibold text-[#333333]">Nuevo Router</h2>
               <button onClick={() => setShowForm(false)} className="text-[#6C757D] hover:text-slate-900 transition-colors">
                 <X className="w-5 h-5" />
               </button>
@@ -194,35 +229,11 @@ export default function Routers() {
                   className="flex-1 h-10 px-3 rounded-lg border border-slate-300 text-sm text-[#495057] placeholder:text-[#AAB0B6] focus:border-[#007BFF] focus:outline-none focus:ring-1 focus:ring-[#007BFF] transition-colors"
                 />
               </div>
-              <div className="flex items-center gap-3">
-                <label className="w-32 shrink-0 text-right text-sm font-medium text-[#495057]">Usar TLS</label>
-                <div className="flex-1">
-                  <label className="inline-flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={form.use_tls || false} onChange={(e) => setForm({ ...form, use_tls: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-[#007BFF] focus:ring-[#007BFF]" />
-                    <span className="text-sm text-[#6C757D]">Conexión cifrada (puerto 8729)</span>
-                  </label>
-                </div>
-              </div>
               <RowInput label="Usuario Mikrotik" placeholder="usuario de conexión" value={form.username} onChange={(v) => setForm({ ...form, username: v })} required />
-              <div className="flex items-center gap-3">
-                <label className="w-32 shrink-0 text-right text-sm font-medium text-[#495057]">Contraseña Mikrotik</label>
-                <div className="flex-1 relative">
-                  <input
-                    type={showPass ? "text" : "password"}
-                    value={form.password || ""}
-                    onChange={(e) => setForm({ ...form, password: e.target.value })}
-                    placeholder="contraseña de conexión"
-                    required
-                    className="w-full h-10 px-3 pr-10 rounded-lg border border-slate-300 text-sm text-[#495057] placeholder:text-[#AAB0B6] focus:border-[#007BFF] focus:outline-none focus:ring-1 focus:ring-[#007BFF] transition-colors"
-                  />
-                  <button type="button" onClick={() => setShowPass((s) => !s)} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[#6C757D] hover:text-slate-900">
-                    {showPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
+              <RowInput label="Contraseña Mikrotik" placeholder="contraseña de conexión" value={form.password} onChange={(v) => setForm({ ...form, password: v })} required type="password" />
               <div className="flex justify-end gap-2 pt-3 -mx-5 -mb-5 px-5 py-3.5 bg-[#F8F9FA] border-t border-slate-200">
                 <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 rounded-lg text-sm font-medium text-[#495057] bg-white border border-slate-300 hover:bg-slate-50 transition-colors">Cerrar</button>
-                <button type="submit" disabled={saving} className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-[#007BFF] hover:bg-[#0069D9] disabled:opacity-50 transition-colors">{saving ? "Registrando…" : "Registrar"}</button>
+                <button type="submit" disabled={saving} className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-[#007BFF] hover:bg-[#0069D9] disabled:opacity-50 transition-colors">{saving ? 'Registrando…' : 'Registrar'}</button>
               </div>
             </form>
           </div>
@@ -233,25 +244,19 @@ export default function Routers() {
 }
 
 function StatusBadge({ status, syncing }) {
-  if (syncing) {
-    return <span className="inline-block text-xs font-semibold px-3 py-1 rounded-full bg-amber-100 text-amber-700">VERIFICANDO…</span>;
-  }
-  const map = {
-    online: "bg-[#00a8a8] text-white",
-    offline: "bg-rose-500 text-white",
-    unknown: "bg-slate-200 text-slate-500",
-  };
-  const labels = { online: "CONECTADO", offline: "DESCONECTADO", unknown: "SIN CONECTAR" };
+  if (syncing) return <span className="inline-block text-xs font-semibold px-3 py-1 rounded-full bg-amber-100 text-amber-700">VERIFICANDO…</span>;
+  const map = { online: 'bg-[#00a8a8] text-white', offline: 'bg-rose-500 text-white', unknown: 'bg-slate-200 text-slate-500' };
+  const labels = { online: 'CONECTADO', offline: 'DESCONECTADO', unknown: 'SIN CONECTAR' };
   return <span className={`inline-block text-xs font-semibold px-3 py-1 rounded-full ${map[status] || map.unknown}`}>{labels[status] || labels.unknown}</span>;
 }
 
-function RowInput({ label, value, onChange, placeholder, type = "text", required }) {
+function RowInput({ label, value, onChange, placeholder, type = 'text', required }) {
   return (
     <div className="flex items-center gap-3">
       <label className="w-32 shrink-0 text-right text-sm font-medium text-[#495057]">{label}</label>
       <input
         type={type}
-        value={value || ""}
+        value={value || ''}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         required={required}
