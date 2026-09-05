@@ -19,9 +19,9 @@ export default function MikrotikTab({ routerId }) {
   const [interfaces, setInterfaces] = useState([]);
   const [selectedIface, setSelectedIface] = useState('');
   const [trafficData, setTrafficData] = useState([]);
+  const [currentTraffic, setCurrentTraffic] = useState({ tx: 0, rx: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [polling, setPolling] = useState(false);
 
   const trafficPollRef = useRef(null);
   const infoPollRef = useRef(null);
@@ -30,7 +30,6 @@ export default function MikrotikTab({ routerId }) {
     loadInitialData();
   }, [routerId]);
 
-  // Intervalo para información general (cada 10 segundos para no saturar)
   useEffect(() => {
     infoPollRef.current = setInterval(fetchSystemInfo, 10000);
     return () => {
@@ -38,7 +37,6 @@ export default function MikrotikTab({ routerId }) {
     };
   }, [routerId]);
 
-  // Intervalo para tráfico (cada 2 segundos)
   useEffect(() => {
     if (!selectedIface) return;
     setTrafficData([]);
@@ -80,26 +78,28 @@ export default function MikrotikTab({ routerId }) {
 
   const pollTraffic = useCallback(async () => {
     if (!selectedIface) return;
-    setPolling(true);
     try {
       const res = await api.routers.traffic(routerId, selectedIface);
       
       if (res) {
-        const timeLabel = new Date().toLocaleTimeString('es-PE', { hour12: false });
+        // Desenvolver respuesta si el backend retorna un Array o un objeto anidado
+        const dataObj = Array.isArray(res) ? res[0] : (res.data ? (Array.isArray(res.data) ? res.data[0] : res.data) : res);
 
-        // Detección flexible de nombres de atributos recibidos del backend
-        const rawTx = res.tx_bps ?? res['tx-bits-per-second'] ?? res.tx ?? 0;
-        const rawRx = res.rx_bps ?? res['rx-bits-per-second'] ?? res.rx ?? 0;
+        // Mapeo flexible de claves de MikroTik RouterOS
+        const rawTx = dataObj?.['tx-bits-per-second'] ?? dataObj?.tx_bps ?? dataObj?.tx ?? 0;
+        const rawRx = dataObj?.['rx-bits-per-second'] ?? dataObj?.rx_bps ?? dataObj?.rx ?? 0;
 
         const tx = Math.round(((Number(rawTx) || 0) / 1000000) * 100) / 100;
         const rx = Math.round(((Number(rawRx) || 0) / 1000000) * 100) / 100;
 
-        setTrafficData((prev) => [...prev, { time: timeLabel, tx, rx }].slice(-20));
+        const timeLabel = new Date().toLocaleTimeString('es-PE', { hour12: false });
+
+        setCurrentTraffic({ tx, rx });
+        setTrafficData((prev) => [...prev, { time: timeLabel, tx, rx }].slice(-30));
       }
     } catch (e) {
       console.error('Error al obtener tráfico:', e);
     }
-    setPolling(false);
   }, [routerId, selectedIface]);
 
   if (loading) {
@@ -160,44 +160,68 @@ export default function MikrotikTab({ routerId }) {
         </div>
       </div>
 
-      {/* Panel Derecho: Tráfico Actual */}
-      <div className="lg:col-span-8 bg-white border border-slate-300 rounded shadow-sm p-4">
-        <div className="flex items-center justify-end gap-3 mb-4">
-          <span className="text-xs text-slate-700 font-medium">Seleccionar Interface</span>
-          <select
-            value={selectedIface}
-            onChange={(e) => setSelectedIface(e.target.value)}
-            className="h-8 px-3 text-xs rounded border border-slate-300 text-slate-800 bg-white focus:outline-none focus:border-sky-500"
-          >
-            {interfaces.map((iface) => (
-              <option key={iface.name} value={iface.name}>{iface.name}</option>
-            ))}
-          </select>
+      {/* Panel Derecho: Tráfico Actual estilo Imagen 2 */}
+      <div className="lg:col-span-8 bg-white border border-slate-300 rounded shadow-sm overflow-hidden">
+        {/* Cabecera del Panel */}
+        <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5 flex items-center justify-between">
+          <h2 className="text-xs font-semibold text-slate-700">Tráfico Actual</h2>
         </div>
 
-        <div className="w-full">
-          {trafficData.length === 0 ? (
-            <div className="h-[320px] flex items-center justify-center">
-              <p className="text-xs text-slate-400">Recopilando datos de tráfico…</p>
-            </div>
-          ) : (
-            <ResponsiveContainer width="100%" height={320}>
-              <LineChart data={trafficData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="1 1" stroke="#e2e8f0" />
-                <XAxis dataKey="time" tick={{ fontSize: 10, fill: '#64748b' }} />
-                <YAxis
-                  tick={{ fontSize: 10, fill: '#64748b' }}
-                  tickFormatter={(v) => `${v.toFixed(2)} Mbps`}
-                />
-                <Tooltip
-                  contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155', borderRadius: '4px', fontSize: '11px', color: '#fff' }}
-                  formatter={(value, name) => [`${Number(value).toFixed(2)} Mbps`, name]}
-                />
-                <Line type="monotone" dataKey="tx" stroke="#0284c7" strokeWidth={1.5} dot={false} name="TX" isAnimationActive={false} />
-                <Line type="monotone" dataKey="rx" stroke="#dc2626" strokeWidth={1.5} dot={false} name="RX" isAnimationActive={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          )}
+        <div className="p-4">
+          {/* Selector de Interfaz */}
+          <div className="flex items-center justify-end gap-3 mb-3">
+            <span className="text-xs text-slate-700 font-medium">Seleccionar Interface</span>
+            <select
+              value={selectedIface}
+              onChange={(e) => setSelectedIface(e.target.value)}
+              className="h-8 px-3 text-xs rounded border border-slate-300 text-slate-800 bg-white focus:outline-none focus:border-sky-500"
+            >
+              {interfaces.map((iface) => (
+                <option key={iface.name} value={iface.name}>{iface.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Gráfica con borde y leyendas integradas */}
+          <div className="relative border border-slate-400 p-2 bg-white rounded-sm">
+            {trafficData.length === 0 ? (
+              <div className="h-[320px] flex items-center justify-center">
+                <p className="text-xs text-slate-400">Recopilando datos de tráfico…</p>
+              </div>
+            ) : (
+              <>
+                <ResponsiveContainer width="100%" height={320}>
+                  <LineChart data={trafficData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                    <CartesianGrid stroke="#e2e8f0" strokeDasharray="0" />
+                    <XAxis dataKey="time" hide={true} />
+                    <YAxis
+                      tick={{ fontSize: 10, fill: '#334155' }}
+                      tickFormatter={(v) => `${Number(v).toFixed(2)} Mbps`}
+                      domain={[0, 'auto']}
+                    />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155', borderRadius: '4px', fontSize: '11px', color: '#fff' }}
+                      formatter={(value, name) => [`${Number(value).toFixed(2)} Mbps`, name]}
+                    />
+                    <Line type="monotone" dataKey="tx" stroke="#0284c7" strokeWidth={1.8} dot={false} name="TX" isAnimationActive={false} />
+                    <Line type="monotone" dataKey="rx" stroke="#dc2626" strokeWidth={1.8} dot={false} name="RX" isAnimationActive={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+
+                {/* Recuadro flotante con valores de TX y RX (igual a la imagen 2) */}
+                <div className="absolute bottom-6 left-12 bg-slate-800/90 text-white text-[11px] px-3 py-1.5 rounded shadow flex flex-col gap-1 border border-slate-700">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-sky-500"></span>
+                    <span>TX: {currentTraffic.tx.toFixed(2)} Mbps</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-red-600"></span>
+                    <span>RX: {currentTraffic.rx.toFixed(2)} Mbps</span>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>
