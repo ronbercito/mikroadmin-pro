@@ -1,4 +1,4 @@
-const BASE = import.meta.env.VITE_API_URL || '/api';
+const BASE = import.meta.env.VITE_API_URL || '/admin/api';
 let token = localStorage.getItem('access_token') || null;
 
 export function setToken(t) {
@@ -14,7 +14,7 @@ async function request(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, { ...options, headers });
   if (res.status === 401 && !path.startsWith('/auth/')) {
     setToken(null);
-    window.location.href = '/login';
+    window.location.href = '/admin/login';
   }
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new Error(data?.error || 'Error');

@@ -58,7 +58,7 @@ node prisma/seed.js
 
 echo "[5/8] Frontend: build..."
 cd "$APP_DIR/frontend"
-echo "VITE_API_URL=/api" > .env
+echo "VITE_API_URL=/admin/api" > .env
 npm install
 npm run build
 rm -rf "$FRONTEND_DIR"
@@ -85,17 +85,21 @@ pm2 startup systemd -y >/dev/null 2>&1 || true
 echo "[7/8] Nginx..."
 cat > /etc/nginx/sites-available/mikroadmin <<EOF
 server {
-  listen 80;
+  listen 80 default_server;
   server_name $SERVER_NAME;
-  root $FRONTEND_DIR;
-  index index.html;
-  location /api/ {
+  location /admin/api/ {
     proxy_pass http://127.0.0.1:4000/api/;
     proxy_set_header Host \$host;
     proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
   }
-  location / { try_files \$uri \$uri/ /index.html; }
+  location /admin/ {
+    alias $FRONTEND_DIR/;
+    index index.html;
+    try_files \$uri \$uri/ /admin/index.html;
+  }
+  location = /admin { return 301 /admin/; }
+  location = / { return 301 /admin/; }
 }
 EOF
 ln -sf /etc/nginx/sites-available/mikroadmin /etc/nginx/sites-enabled/mikroadmin
@@ -105,7 +109,7 @@ nginx -t && systemctl reload nginx
 echo "[8/8] Listo."
 IP="$(hostname -I | awk '{print $1}')"
 echo "----------------------------------------"
-echo " Panel:  http://$IP"
+echo " Panel:  http://$IP/admin"
 echo " Admin:  $ADMIN_EMAIL / $ADMIN_PASSWORD"
 echo " Notas:  - Edita SERVER_NAME en install.sh y vuelve a correr para tu dominio."
 echo "         - HTTPS: apt-get install certbot && certbot --nginx -d tu-dominio"
