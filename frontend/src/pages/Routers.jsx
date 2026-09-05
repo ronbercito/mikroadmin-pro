@@ -80,7 +80,7 @@ export default function Routers() {
       const res = await api.routers.test(id);
       setDiag(res);
     } catch (e) {
-      setDiag({ tcp: { ok: false, error: e.message } });
+      setDiag({ tcp: { ok: false, error: e.message }, api: { ok: false, error: e.message } });
     }
     setTesting(null);
   }
@@ -105,24 +105,32 @@ export default function Routers() {
       {diag && (
         <div className="mb-4 bg-white border border-slate-200 rounded-lg p-4">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-semibold text-slate-700">Diagnóstico de conexión TCP</h3>
+            <h3 className="text-sm font-semibold text-slate-700">Diagnóstico de conexión</h3>
             <button onClick={() => setDiag(null)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
           </div>
           <div className="space-y-2 text-sm">
-            <div className="flex gap-2"><span className="text-slate-500 w-24">Destino:</span><span className="font-mono text-slate-700">{diag.host}:{diag.port} {diag.use_tls ? '(TLS)' : '(sin TLS)'}</span></div>
-            <div className="flex gap-2"><span className="text-slate-500 w-24">TCP crudo:</span>
+            <div className="flex gap-2"><span className="text-slate-500 w-28">Destino:</span><span className="font-mono text-slate-700">{diag.host}:{diag.port} {diag.use_tls ? '(TLS)' : '(sin TLS)'}</span></div>
+            <div className="flex gap-2"><span className="text-slate-500 w-28">TCP crudo:</span>
               {diag.tcp?.ok
                 ? <span className="text-emerald-600 font-medium">✓ Conectado en {diag.tcp.ms}ms</span>
                 : <span className="text-rose-600 font-medium">✗ {diag.tcp?.error || 'Falló'}</span>}
             </div>
-            <div className="flex gap-2"><span className="text-slate-500 w-24">Hora servidor:</span><span className="font-mono text-slate-600 text-xs">{diag.server_time}</span></div>
+            <div className="flex gap-2"><span className="text-slate-500 w-28">Login API:</span>
+              {diag.api?.ok
+                ? <span className="text-emerald-600 font-medium">✓ Autenticado — {diag.api.board} v{diag.api.version}</span>
+                : <span className="text-rose-600 font-medium">✗ {diag.api?.error || 'Falló'}</span>}
+            </div>
+            <div className="flex gap-2"><span className="text-slate-500 w-28">Hora servidor:</span><span className="font-mono text-slate-600 text-xs">{diag.server_time}</span></div>
           </div>
-          {!diag.tcp?.ok && (
+          {diag.tcp?.ok && !diag.api?.ok && (
             <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
-              <strong>Posible causa:</strong> El servidor Linux donde corre MikroAdmin no puede alcanzar la IP del router.
-              Verifica que el servidor esté en la misma red que el MikroTik o que haya ruta hacia {diag.host}.
-              Ejecuta desde tu servidor: <code className="bg-amber-100 px-1 rounded">ping {diag.host}</code> y
-              <code className="bg-amber-100 px-1 rounded ml-1">nc -zv {diag.host} {diag.port}</code>
+              <strong>El puerto TCP está abierto pero el login API falló.</strong> Causas comunes:
+              <ul className="list-disc list-inside mt-1 space-y-0.5">
+                <li>El puerto <strong>{diag.port}</strong> no es el puerto API de MikroTik (debe ser <strong>8728</strong> sin TLS o <strong>8729</strong> con TLS)</li>
+                <li>TLS está {diag.use_tls ? 'activado' : 'desactivado'} — verifica que coincida con la configuración del router</li>
+                <li>Usuario o contraseña incorrectos</li>
+                <li>El servicio API no está habilitado en MikroTik (IP → Services → api)</li>
+              </ul>
             </div>
           )}
         </div>
