@@ -11,6 +11,7 @@ import infoRoutes from './routes/info.js';
 import trafficFlowRoutes from './routes/traffic-flow.js';
 import securityAltRoutes from './routes/security-alt.js';
 import diagnosticRoutes from './routes/diagnostic.js';
+import networkRoutes from './routes/networks.js'; // <-- 1. Importar ruta de redes
 import { startCron } from './jobs/cron.js';
 
 const app = express();
@@ -24,10 +25,11 @@ app.use('/api/clients', clientRoutes);
 app.use('/api/billing', billingRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/cutoff', cutoffRoutes);
+app.use('/api/networks', networkRoutes); // <-- 2. Registrar endpoint /api/networks
 app.use('/api/routers', infoRoutes);
 app.use('/api/routers', trafficFlowRoutes);
 app.use('/api/routers', securityAltRoutes);
 app.use('/api/routers', diagnosticRoutes);
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => { console.log(`API MikroAdmin en http://localhost:${PORT}`); startCron(); });
+app.listen(PORT, () => { console.log(`API MikroAdmin en http://localhost:${PORT}`); });
