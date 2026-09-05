@@ -1,397 +1,156 @@
-// Cliente para la API nativa de MikroTik RouterOS (protocolo API, puerto 8728/8729)
-import net from 'net';
-import tls from 'tls';
-import crypto from 'crypto';
+import { useEffect, useState } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { api } from '../api/client';
+import {
+  Settings, Router as RouterIcon, ScrollText,
+  Maximize2, X, Save, Eye, EyeOff, MapPin, ChevronRight, Loader2,
+} from 'lucide-react';
+import MikrotikTab from '../components/MikrotikTab';
+import LogTab from '../components/LogTab';
 
-const SUSPENDED_LIST = 'isp-suspended';
-const BOOL_FIELDS = new Set(['disabled', 'dynamic', 'invalid', 'running', 'active', 'blocked', 'radius']);
+const cn = (...a) => a.filter(Boolean).join(' ');
 
-// --- Codificación del protocolo API (length-prefixed words) ---
+const TABS = [
+  { id: 'datos', label: 'Datos & Configuración', icon: Settings },
+  { id: 'mikrotik', label: 'Mikrotik', icon: RouterIcon },
+  { id: 'log', label: 'Log', icon: ScrollText },
+];
 
-function encodeLength(len) {
-  if (len < 0x80) return Buffer.from([len]);
-  if (len < 0x4000) return Buffer.from([0x80 | (len >> 8), len & 0xFF]);
-  if (len < 0x200000) return Buffer.from([0xC0 | (len >> 16), (len >> 8) & 0xFF, len & 0xFF]);
-  if (len < 0x10000000) return Buffer.from([0xE0 | (len >> 24), (len >> 16) & 0xFF, (len >> 8) & 0xFF, len & 0xFF]);
-  return Buffer.from([0xF0, (len >> 24) & 0xFF, (len >> 16) & 0xFF, (len >> 8) & 0xFF, len & 0xFF]);
-}
+export default function RouterEdit() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const [tab, setTab] = useState('datos');
+  const [form, setForm] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [showPwd, setShowPwd] = useState(false);
 
-function encodeWord(str) {
-  const buf = Buffer.from(str, 'utf8');
-  return Buffer.concat([encodeLength(buf.length), buf]);
-}
+  useEffect(() => {
+    api.routers.get(id).then((r) => setForm({
+      name: r.name || '', router_type: r.router_type || 'MikroTik', host: r.host || '',
+      api_port: r.api_port || 8728, use_tls: r.use_tls === true, username: r.username || '',
+      password: r.password || '', location: r.location || '',
+      security: r.security || 'none_accounting_api', security_alt: r.security_alt || 'none',
+      radius_secret: r.radius_secret || '', radius_nas_ip: r.radius_nas_ip || '',
+      traffic_logging: r.traffic_logging || 'traffic_flow',
+      traffic_flow_target: r.traffic_flow_target || '', traffic_flow_interface: r.traffic_flow_interface || 'all',
+      speed_control: r.speed_control || 'simple_queues', save_visited_ips: r.save_visited_ips !== false,
+      notes: r.notes || '',
+    })).finally(() => setLoading(false));
+  }, [id]);
 
-function encodeSentence(words) {
-  const parts = words.map(encodeWord);
-  parts.push(Buffer.from([0]));
-  return Buffer.concat(parts);
-}
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
-function readLength(buf, offset) {
-  if (offset >= buf.length) return null;
-  const b = buf[offset];
-  if (b < 0x80) return { length: b, bytesRead: 1 };
-  if ((b & 0xC0) === 0x80) {
-    if (offset + 1 >= buf.length) return null;
-    return { length: ((b & 0x3F) << 8) | buf[offset + 1], bytesRead: 2 };
-  }
-  if ((b & 0xE0) === 0xC0) {
-    if (offset + 2 >= buf.length) return null;
-    return { length: ((b & 0x1F) << 16) | (buf[offset + 1] << 8) | buf[offset + 2], bytesRead: 3 };
-  }
-  if ((b & 0xF0) === 0xE0) {
-    if (offset + 3 >= buf.length) return null;
-    return { length: ((b & 0x0F) << 24) | (buf[offset + 1] << 16) | (buf[offset + 2] << 8) | buf[offset + 3], bytesRead: 4 };
-  }
-  if ((b & 0xF8) === 0xF0) {
-    if (offset + 4 >= buf.length) return null;
-    return { length: (buf[offset + 1] << 24) | (buf[offset + 2] << 16) | (buf[offset + 3] << 8) | buf[offset + 4], bytesRead: 5 };
-  }
-  return null;
-}
-
-// --- Conexión TCP con el router ---
-
-class RouterOSConnection {
-  constructor(sock) {
-    this.sock = sock;
-    this.buffer = Buffer.alloc(0);
-    this.waiter = null;
-    this.waiterErr = null;
-    sock.on('data', (data) => this.onData(data));
-    sock.on('error', (err) => this.fail(err));
-    sock.on('close', () => this.fail(new Error('Conexión cerrada')));
-    sock.on('timeout', () => { sock.destroy(new Error('Timeout de conexión')); });
-  }
-
-  onData(data) {
-    this.buffer = Buffer.concat([this.buffer, data]);
-    this.tryResolve();
-  }
-
-  fail(err) {
-    if (this.waiterErr) {
-      const e = this.waiterErr;
-      this.waiter = null;
-      this.waiterErr = null;
-      e(err);
-    }
-  }
-
-  tryResolve() {
-    while (this.waiter) {
-      const sentence = this.tryReadSentence();
-      if (!sentence) break;
-      const w = this.waiter;
-      this.waiter = null;
-      this.waiterErr = null;
-      w(sentence);
-    }
-  }
-
-  tryReadSentence() {
-    const words = [];
-    let offset = 0;
-    while (true) {
-      const lenInfo = readLength(this.buffer, offset);
-      if (!lenInfo) return null;
-      offset += lenInfo.bytesRead;
-      if (lenInfo.length === 0) {
-        this.buffer = this.buffer.subarray(offset);
-        return words;
+  async function save(e) {
+    e.preventDefault(); setSaving(true);
+    try {
+      await api.routers.update(id, form);
+      if (form.security_alt && form.security_alt !== 'none' && form.security !== 'ppp_accounting_api') {
+        try { await api.routers.applySecurityAlt(id); } catch (e) { console.error('Error aplicando seguridad alterna:', e); }
       }
-      if (offset + lenInfo.length > this.buffer.length) return null;
-      words.push(this.buffer.subarray(offset, offset + lenInfo.length).toString('utf8'));
-      offset += lenInfo.length;
-    }
+      try { await api.routers.applyTrafficFlow(id); } catch (e) { console.error('Error aplicando traffic flow:', e); }
+      navigate('/routers');
+    } catch (err) { alert('Error al guardar: ' + err.message); }
+    setSaving(false);
   }
 
-  write(words) {
-    this.sock.write(encodeSentence(words));
-  }
+  if (loading) return <div className="p-8 flex justify-center"><Loader2 className="w-6 h-6 animate-spin text-slate-400" /></div>;
+  if (!form) return <div className="p-8 text-slate-500">Router no encontrado.</div>;
 
-  read() {
-    return new Promise((resolve, reject) => {
-      this.waiter = resolve;
-      this.waiterErr = reject;
-      this.tryResolve();
-    });
-  }
-
-  close() {
-    this.sock.destroy();
-  }
+  return (
+    <div className="p-6 max-w-6xl mx-auto" style={{ background: '#dce0e6', minHeight: '100%' }}>
+      <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-3 justify-end">
+        <Link to="/" className="hover:text-slate-800">Inicio</Link><ChevronRight className="w-3 h-3" />
+        <Link to="/routers" className="hover:text-slate-800">Lista Routers</Link><ChevronRight className="w-3 h-3" />
+        <span className="text-slate-700 font-medium">Editar router</span>
+      </div>
+      <div className="rounded-t-xl overflow-hidden" style={{ background: '#212121' }}>
+        <div className="flex items-center justify-between px-2">
+          <div className="flex">
+            {TABS.map((t) => {
+              const Icon = t.icon;
+              return (
+                <button key={t.id} onClick={() => setTab(t.id)}
+                  className={cn('flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2', tab === t.id ? 'text-white border-sky-500 bg-white/5' : 'text-white/60 border-transparent hover:text-white/90 hover:bg-white/5')}>
+                  <Icon className="w-4 h-4" />{t.label}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-1 pr-2">
+            <button className="p-1.5 text-white/50 hover:text-white rounded"><Maximize2 className="w-4 h-4" /></button>
+            <button onClick={() => navigate('/routers')} className="p-1.5 text-white/50 hover:text-white rounded"><X className="w-4 h-4" /></button>
+          </div>
+        </div>
+      </div>
+      <div className="bg-white rounded-b-xl border border-slate-200 shadow-sm">
+        {tab === 'datos' && (
+          <form onSubmit={save}>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-6 p-8">
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-4">Datos & Configuración</h3>
+                <div className="space-y-4">
+                  <FF label="Nombre Router"><input value={form.name} onChange={(e) => set('name', e.target.value)} required className="form-input" /></FF>
+                  <FF label="Tipo Router"><select value={form.router_type} onChange={(e) => set('router_type', e.target.value)} className="form-input"><option>MikroTik</option><option>Ubiquiti</option><option>Cisco</option><option>Otro</option></select></FF>
+                  <FF label="Ubicación"><div className="relative"><input value={form.location} onChange={(e) => set('location', e.target.value)} placeholder="lat,long" className="form-input pr-9" /><MapPin className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" /></div></FF>
+                  <FF label="IP / Host"><input value={form.host} onChange={(e) => set('host', e.target.value)} required className="form-input" /></FF>
+                  <FF label="Seguridad"><select value={form.security} onChange={(e) => set('security', e.target.value)} className="form-input"><option value="none_accounting_api">Ninguno / Accounting API</option><option value="ppp_accounting_api">PPP / Accounting API</option></select></FF>
+                  <FF label="Seguridad alterna">
+                    <select
+                      value={form.security === 'ppp_accounting_api' ? 'none' : form.security_alt}
+                      onChange={(e) => set('security_alt', e.target.value)}
+                      disabled={form.security === 'ppp_accounting_api'}
+                      className="form-input disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
+                    >
+                      <option value="none">Ninguno</option>
+                      <option value="ip_mac_binding">Amarre de IP y Mac</option>
+                      <option value="dhcp_leases">DHCP Leases</option>
+                      <option value="ip_binding">IP Binding</option>
+                      <option value="ip_mac_dhcp">Amarre de IP y Mac + DHCP Leases</option>
+                    </select>
+                    {form.security === 'ppp_accounting_api' && <p className="text-xs text-slate-400 mt-1">Se desactiva con PPP (clientes PPPoE usan la seguridad principal).</p>}
+                  </FF>
+                </div>
+              </div>
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-4">MIKROTIK</h3>
+                <div className="space-y-4">
+                  <FF label="Usuario (API)"><input value={form.username} onChange={(e) => set('username', e.target.value)} required className="form-input" /></FF>
+                  <FF label="Contraseña (API)"><div className="relative"><input type={showPwd ? 'text' : 'password'} value={form.password} onChange={(e) => set('password', e.target.value)} required className="form-input pr-9" /><button type="button" onClick={() => setShowPwd((v) => !v)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">{showPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}</button></div></FF>
+                  <FF label="Registro de tráfico"><select value={form.traffic_logging} onChange={(e) => set('traffic_logging', e.target.value)} className="form-input"><option value="none">Ninguno</option><option value="traffic_flow">Traffic Flow (RouterOS V6x, V7.x)</option></select></FF>
+                  {form.traffic_logging === 'traffic_flow' && (
+                    <>
+                      <FF label="IP:Puerto del colector"><input value={form.traffic_flow_target || ''} onChange={(e) => set('traffic_flow_target', e.target.value)} placeholder="ej: 192.168.1.100:2055" className="form-input" /></FF>
+                      <FF label="Interfaz a monitorear"><input value={form.traffic_flow_interface || ''} onChange={(e) => set('traffic_flow_interface', e.target.value)} placeholder="all" className="form-input" /></FF>
+                    </>
+                  )}
+                  <FF label="Control Velocidad"><select value={form.speed_control} onChange={(e) => set('speed_control', e.target.value)} className="form-input"><option value="simple_queues">Colas Simples (Estáticas)</option><option value="pcq_addresslist">PCQ + Addresslist</option><option value="simple_queues_dynamic">Colas simples (Dinámicas)</option><option value="dhcp_lease_dynamic">DHCP Lease (Colas simples Dinámicas)</option><option value="none">Ninguno</option></select></FF>
+                  <div className="flex items-center justify-between py-1">
+                    <div>
+                      <span className={cn('text-sm font-medium', form.speed_control === 'none' ? 'text-slate-400' : 'text-slate-700')}>Guardar IP Visitadas</span>
+                      {form.speed_control === 'none' && <p className="text-xs text-slate-400 mt-0.5">Se desactiva con Ninguno.</p>}
+                    </div>
+                    <button type="button" disabled={form.speed_control === 'none'} onClick={() => set('save_visited_ips', !form.save_visited_ips)} className={cn('relative w-11 h-6 rounded-full transition-colors disabled:cursor-not-allowed', form.speed_control === 'none' ? 'bg-slate-200' : form.save_visited_ips ? 'bg-[#00a896]' : 'bg-slate-300')}>
+                      <span className={cn('absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform', form.save_visited_ips && form.speed_control !== 'none' && 'translate-x-5')} />
+                    </button>
+                  </div>
+                  <div className="pt-4">
+                    <button type="submit" disabled={saving} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-white text-sm font-medium disabled:opacity-60 transition-opacity" style={{ background: '#2196f3' }}>
+                      {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}Guardar Cambios
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </form>
+        )}
+        {tab === 'mikrotik' && <MikrotikTab routerId={id} />}
+        {tab === 'log' && <LogTab routerId={id} />}
+      </div>
+    </div>
+  );
 }
 
-async function connect(router) {
-  const useTls = router.use_tls === true;
-  const port = router.api_port || (useTls ? 8729 : 8728);
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Timeout de conexión (10s)')), 10000);
-    if (useTls) {
-      const sock = tls.connect(port, router.host, { rejectUnauthorized: false }, () => {
-        clearTimeout(timer);
-        sock.setTimeout(15000);
-        resolve(new RouterOSConnection(sock));
-      });
-      sock.on('error', (err) => { clearTimeout(timer); reject(err); });
-    } else {
-      const sock = new net.Socket();
-      sock.on('error', (err) => { clearTimeout(timer); reject(err); });
-      sock.connect(port, router.host, () => {
-        clearTimeout(timer);
-        sock.setTimeout(15000);
-        resolve(new RouterOSConnection(sock));
-      });
-    }
-  });
-}
-
-// --- Autenticación compatible con RouterOS v6 y RouterOS v7 ---
-
-async function login(conn, username, password) {
-  // 1. Método RouterOS v7 / Plaintext
-  conn.write(['/login', `=name=${username}`, `=password=${password}`]);
-  let result = await conn.read();
-
-  if (result[0] === '!done') {
-    return; // Login exitoso en RouterOS v7
-  }
-
-  // 2. Fallback a RouterOS v6 (MD5 Challenge/Response)
-  let challenge = '';
-  for (const w of result) {
-    if (w.startsWith('=ret=')) challenge = w.slice(5);
-  }
-
-  if (challenge) {
-    const hash = crypto
-      .createHash('md5')
-      .update(Buffer.concat([
-        Buffer.from([0]),
-        Buffer.from(password, 'utf8'),
-        Buffer.from(challenge, 'hex')
-      ]))
-      .digest('hex');
-
-    conn.write(['/login', `=name=${username}`, `=response=${hash}`]);
-    result = await conn.read();
-
-    if (result[0] === '!done') {
-      return; // Login exitoso en RouterOS v6
-    }
-  }
-
-  // Si fallan ambos intentos
-  const msg = result.find((w) => w.startsWith('=message=')) || '';
-  throw new Error('Login fallido: ' + (msg ? msg.slice(9) : 'Credenciales o permisos incorrectos'));
-}
-
-function parseRecord(words) {
-  const rec = {};
-  for (const w of words) {
-    if (w.startsWith('=')) {
-      const eq = w.indexOf('=', 1);
-      const key = w.slice(1, eq);
-      const val = w.slice(eq + 1);
-      rec[key] = BOOL_FIELDS.has(key) ? val === 'true' : val;
-    } else if (w.startsWith('.')) {
-      const eq = w.indexOf('=', 1);
-      if (eq > 0) rec[w.slice(0, eq)] = w.slice(eq + 1);
-    }
-  }
-  return rec;
-}
-
-async function runCommand(router, path, params = {}) {
-  const conn = await connect(router);
-  try {
-    await login(conn, router.username, router.password);
-    const words = [path];
-    for (const [k, v] of Object.entries(params)) words.push(`=${k}=${v}`);
-    conn.write(words);
-    const records = [];
-    while (true) {
-      const sentence = await conn.read();
-      if (sentence[0] === '!done') break;
-      if (sentence[0] === '!re') records.push(parseRecord(sentence.slice(1)));
-      if (sentence[0] === '!trap') {
-        const msg = sentence.find((w) => w.startsWith('=message=')) || '';
-        throw new Error('RouterOS: ' + msg.slice(9));
-      }
-    }
-    return records;
-  } finally {
-    conn.close();
-  }
-}
-
-// === API pública ===
-
-export async function pingRouter(router) {
-  try {
-    await runCommand(router, '/system/identity/print');
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-}
-
-export async function checkConnection(router) {
-  const r = await pingRouter(router);
-  if (!r.ok) throw new Error(r.error);
-  return 'ok';
-}
-
-export async function listDhcpLeases(router) {
-  return runCommand(router, '/ip/dhcp-server/lease/print');
-}
-
-export async function listPppSecrets(router) {
-  return runCommand(router, '/ppp/secret/print');
-}
-
-export async function listFirewallAddressList(router) {
-  return runCommand(router, '/ip/firewall/address-list/print');
-}
-
-export async function disableDhcpLease(router, leaseId) {
-  await runCommand(router, '/ip/dhcp-server/lease/disable', { numbers: leaseId });
-}
-
-export async function enableDhcpLease(router, leaseId) {
-  await runCommand(router, '/ip/dhcp-server/lease/enable', { numbers: leaseId });
-}
-
-export async function disablePppSecret(router, secretId) {
-  await runCommand(router, '/ppp/secret/disable', { numbers: secretId });
-}
-
-export async function enablePppSecret(router, secretId) {
-  await runCommand(router, '/ppp/secret/enable', { numbers: secretId });
-}
-
-export async function addAddressList(router, address, listName, comment) {
-  await runCommand(router, '/ip/firewall/address-list/add', {
-    address,
-    list: listName || SUSPENDED_LIST,
-    comment: comment || 'suspended by ISP panel',
-  });
-}
-
-export async function removeAddressListEntries(router, entries) {
-  for (const e of entries) {
-    await runCommand(router, '/ip/firewall/address-list/remove', { numbers: e['.id'] });
-  }
-}
-
-export async function findAddressListEntries(router, address, listName) {
-  const all = await listFirewallAddressList(router);
-  return (all || []).filter((e) => e.address === address && e.list === listName);
-}
-
-// === Seguridad alterna ===
-
-export async function addStaticDhcpLease(router, macAddress, ipAddress, comment) {
-  const params = { address: ipAddress };
-  if (macAddress) params['mac-address'] = macAddress;
-  if (comment) params.comment = comment;
-  return runCommand(router, '/ip/dhcp-server/lease/add', params);
-}
-
-export async function removeDhcpLease(router, leaseId) {
-  return runCommand(router, '/ip/dhcp-server/lease/remove', { numbers: leaseId });
-}
-
-export async function listIpBindings(router) {
-  return runCommand(router, '/ip/hotspot/ip-binding/print');
-}
-
-export async function addIpBinding(router, address, macAddress, server, type) {
-  const params = { address, type: type || 'regular' };
-  if (macAddress) params['mac-address'] = macAddress;
-  if (server) params.server = server;
-  return runCommand(router, '/ip/hotspot/ip-binding/add', params);
-}
-
-export async function removeIpBinding(router, bindingId) {
-  return runCommand(router, '/ip/hotspot/ip-binding/remove', { numbers: bindingId });
-}
-
-// === System info & interfaces ===
-
-export async function getSystemResource(router) {
-  const records = await runCommand(router, '/system/resource/print');
-  return records[0] || {};
-}
-
-export async function listInterfaces(router) {
-  return runCommand(router, '/interface/print');
-}
-
-export async function monitorInterfaceTraffic(router, interfaceName) {
-  const records = await runCommand(router, '/interface/monitor-traffic', {
-    interface: interfaceName,
-    once: '',
-  });
-  return records[0] || {};
-}
-
-// === Traffic Flow ===
-
-export async function enableTrafficFlow(router) {
-  await runCommand(router, '/ip/traffic-flow/set', { enabled: 'true' });
-}
-
-export async function disableTrafficFlow(router) {
-  await runCommand(router, '/ip/traffic-flow/set', { enabled: 'false' });
-}
-
-export async function setTrafficFlowTarget(router, address) {
-  const existing = await runCommand(router, '/ip/traffic-flow/target/print');
-  for (const t of existing) {
-    await runCommand(router, '/ip/traffic-flow/target/remove', { numbers: t['.id'] });
-  }
-  if (address) {
-    await runCommand(router, '/ip/traffic-flow/target/add', { address });
-  }
-}
-
-export async function setTrafficFlowInterface(router, interfaceName) {
-  const existing = await runCommand(router, '/ip/traffic-flow/interface/print');
-  for (const i of existing) {
-    await runCommand(router, '/ip/traffic-flow/interface/remove', { numbers: i['.id'] });
-  }
-  await runCommand(router, '/ip/traffic-flow/interface/add', { interface: interfaceName });
-}
-
-// === Suspend / Activate ===
-
-export async function suspendClient(router, client) {
-  if (client.connection_type === 'static' && client.ip_address) {
-    await addAddressList(router, client.ip_address, SUSPENDED_LIST, client.full_name);
-  } else if (client.connection_type === 'dhcp' && client.mac_address) {
-    const leases = await listDhcpLeases(router);
-    const lease = leases.find((l) => (l['mac-address'] || '').toLowerCase() === client.mac_address.toLowerCase());
-    if (lease) await disableDhcpLease(router, lease['.id']);
-  } else if (client.connection_type === 'pppoe' && client.pppoe_user) {
-    const secrets = await listPppSecrets(router);
-    const s = secrets.find((x) => x.name === client.pppoe_user);
-    if (s) await disablePppSecret(router, s['.id']);
-  }
-}
-
-export async function activateClient(router, client) {
-  if (client.connection_type === 'static' && client.ip_address) {
-    const entries = await findAddressListEntries(router, client.ip_address, SUSPENDED_LIST);
-    if (entries.length > 0) await removeAddressListEntries(router, entries);
-  } else if (client.connection_type === 'dhcp' && client.mac_address) {
-    const leases = await listDhcpLeases(router);
-    const lease = leases.find((l) => (l['mac-address'] || '').toLowerCase() === client.mac_address.toLowerCase());
-    if (lease) await enableDhcpLease(router, lease['.id']);
-  } else if (client.connection_type === 'pppoe' && client.pppoe_user) {
-    const secrets = await listPppSecrets(router);
-    const s = secrets.find((x) => x.name === client.pppoe_user);
-    if (s) await enablePppSecret(router, s['.id']);
-  }
+function FF({ label, children }) {
+  return <div><label className="block text-sm font-medium text-slate-700 mb-1.5">{label}</label>{children}</div>;
 }
