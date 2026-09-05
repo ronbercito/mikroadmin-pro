@@ -8,7 +8,6 @@ import RouterEdit from './pages/RouterEdit';
 import Clients from './pages/Clients';
 import ClientDetail from './pages/ClientDetail';
 import Ajustes from './pages/Ajustes';
-import Networks from './pages/Networks'; // Importación añadida
 import Placeholder from './pages/Placeholder';
 
 export default function App() {
@@ -20,7 +19,6 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/routers" element={<Routers />} />
           <Route path="/routers/:id/edit" element={<RouterEdit />} />
-          <Route path="/gestion/redes-ipv4" element={<Networks />} /> {/* Ruta registrada */}
           <Route path="/clients" element={<Clients />} />
           <Route path="/clients/:id" element={<ClientDetail />} />
           <Route path="/ajustes" element={<Ajustes />} />

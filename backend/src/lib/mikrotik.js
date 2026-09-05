@@ -147,44 +147,23 @@ async function connect(router) {
   });
 }
 
-// --- Autenticación compatible con RouterOS v6 y RouterOS v7 ---
-
 async function login(conn, username, password) {
-  // 1. Método RouterOS v7 / Plaintext
-  conn.write(['/login', `=name=${username}`, `=password=${password}`]);
-  let result = await conn.read();
-
-  if (result[0] === '!done') {
-    return; // Login exitoso en RouterOS v7
-  }
-
-  // 2. Fallback a RouterOS v6 (MD5 Challenge/Response)
+  conn.write(['/login']);
+  const res = await conn.read();
   let challenge = '';
-  for (const w of result) {
+  for (const w of res) {
     if (w.startsWith('=ret=')) challenge = w.slice(5);
   }
-
-  if (challenge) {
-    const hash = crypto
-      .createHash('md5')
-      .update(Buffer.concat([
-        Buffer.from([0]),
-        Buffer.from(password, 'utf8'),
-        Buffer.from(challenge, 'hex')
-      ]))
-      .digest('hex');
-
-    conn.write(['/login', `=name=${username}`, `=response=${hash}`]);
-    result = await conn.read();
-
-    if (result[0] === '!done') {
-      return; // Login exitoso en RouterOS v6
-    }
+  if (!challenge) throw new Error('Login: no se recibió challenge del router');
+  const hash = crypto.createHash('md5')
+    .update(Buffer.concat([Buffer.from([0]), Buffer.from(password, 'utf8'), Buffer.from(challenge, 'hex')]))
+    .digest('hex');
+  conn.write(['/login', `=name=${username}`, `=response=${hash}`]);
+  const result = await conn.read();
+  if (result[0] !== '!done') {
+    const msg = result.find((w) => w.startsWith('=message=')) || '';
+    throw new Error('Login fallido: ' + msg.slice(9));
   }
-
-  // Si fallan ambos intentos
-  const msg = result.find((w) => w.startsWith('=message=')) || '';
-  throw new Error('Login fallido: ' + (msg ? msg.slice(9) : 'Credenciales o permisos incorrectos'));
 }
 
 function parseRecord(words) {
