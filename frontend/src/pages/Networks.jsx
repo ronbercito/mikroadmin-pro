@@ -27,7 +27,6 @@ const CIDR_OPTIONS = [
   { cidr: 30, label: "30 (255.255.255.252 - 2 hosts, 4 IP)" },
 ];
 
-// Helper para extraer arrays sin importar si la API responde array directo u objeto { data: [...] }
 const extractArray = (resData, key) => {
   if (Array.isArray(resData)) return resData;
   if (resData && Array.isArray(resData[key])) return resData[key];
@@ -80,7 +79,7 @@ export default function Networks() {
       setNetworks(parsedNets);
     } catch (error) {
       console.error("Error al obtener datos:", error);
-    } fontally {
+    } finally {
       setLoading(false);
     }
   };
