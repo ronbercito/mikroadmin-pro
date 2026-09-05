@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo } from "react";
-import axios from "axios";
 import {
   Plus,
   Search,
@@ -13,15 +12,12 @@ import {
   ChevronLeft,
   ChevronRight,
   X,
-  Server,
   List,
   Grid
 } from "lucide-react";
 
-// URL base de la API en tu servidor Debian
-const API_BASE_URL = process.env.REACT_APP_API_URL || "/api";
+const API_BASE_URL = "/api";
 
-// Opciones de CIDR con cálculo de hosts útiles
 const CIDR_OPTIONS = [
   { cidr: 24, label: "24 (255.255.255.0 - 254 hosts, 256 IP)" },
   { cidr: 25, label: "25 (255.255.255.128 - 126 hosts, 128 IP)" },
@@ -42,7 +38,6 @@ export default function Networks() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingNet, setEditingNet] = useState(null);
 
-  // Form State
   const [formData, setFormData] = useState({
     name: "",
     router_id: "",
@@ -51,16 +46,15 @@ export default function Networks() {
     type: "ESTÁTICO",
   });
 
-  // Cargar datos del Backend Debian
   const fetchData = async () => {
     setLoading(true);
     try {
       const [netsRes, routersRes] = await Promise.all([
-        axios.get(`${API_BASE_URL}/networks`),
-        axios.get(`${API_BASE_URL}/routers`),
+        fetch(`${API_BASE_URL}/networks`).then((r) => (r.ok ? r.json() : [])),
+        fetch(`${API_BASE_URL}/routers`).then((r) => (r.ok ? r.json() : [])),
       ]);
-      setNetworks(netsRes.data || []);
-      setRouters(routersRes.data || []);
+      setNetworks(Array.isArray(netsRes) ? netsRes : []);
+      setRouters(Array.isArray(routersRes) ? routersRes : []);
     } catch (error) {
       console.error("Error al obtener redes/routers:", error);
     } finally {
@@ -72,7 +66,6 @@ export default function Networks() {
     fetchData();
   }, []);
 
-  // Filtrado y Paginación
   const filteredNetworks = useMemo(() => {
     return networks.filter(
       (n) =>
@@ -88,7 +81,6 @@ export default function Networks() {
     return filteredNetworks.slice(start, start + pageSize);
   }, [filteredNetworks, currentPage, pageSize]);
 
-  // Manejo de Modal (Abrir/Cerrar/Editar)
   const openModal = (net = null) => {
     if (net) {
       setEditingNet(net);
@@ -117,27 +109,37 @@ export default function Networks() {
     setEditingNet(null);
   };
 
-  // Guardar / Actualizar Red
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      if (editingNet) {
-        await axios.put(`${API_BASE_URL}/networks/${editingNet.id}`, formData);
-      } else {
-        await axios.post(`${API_BASE_URL}/networks`, formData);
+      const url = editingNet
+        ? `${API_BASE_URL}/networks/${editingNet.id}`
+        : `${API_BASE_URL}/networks`;
+      const method = editingNet ? "PUT" : "POST";
+
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formData),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.message || "Error al procesar la solicitud");
       }
+
       closeModal();
       fetchData();
     } catch (error) {
-      alert("Error al guardar la red: " + (error.response?.data?.message || error.message));
+      alert(error.message || "Error al guardar la red");
     }
   };
 
-  // Eliminar Red
   const handleDelete = async (id, name) => {
     if (window.confirm(`¿Está seguro de eliminar la red "${name}"?`)) {
       try {
-        await axios.delete(`${API_BASE_URL}/networks/${id}`);
+        const res = await fetch(`${API_BASE_URL}/networks/${id}`, { method: "DELETE" });
+        if (!res.ok) throw new Error("Error al eliminar");
         fetchData();
       } catch (error) {
         alert("Error al eliminar la red");
@@ -145,7 +147,6 @@ export default function Networks() {
     }
   };
 
-  // Ayudante para obtener el número de hosts según CIDR
   const getHostsCount = (cidr) => {
     const total = Math.pow(2, 32 - parseInt(cidr || 24));
     return total > 2 ? total - 2 : total;
@@ -153,10 +154,9 @@ export default function Networks() {
 
   return (
     <div className="w-full font-sans text-gray-700 bg-gray-100 min-h-screen p-4">
-      {/* Contenedor Principal */}
       <div className="bg-white rounded-t shadow-sm border border-gray-200 overflow-hidden">
         
-        {/* Cabecera Azul */}
+        {/* Header Superior */}
         <div className="bg-[#0267a5] text-white px-4 py-2.5 flex items-center justify-between">
           <span className="font-medium text-sm">Redes IPv4</span>
           <div className="flex items-center space-x-2 text-white/80">
@@ -166,7 +166,7 @@ export default function Networks() {
           </div>
         </div>
 
-        {/* Barra de Herramientas Superior */}
+        {/* Toolbar Superior */}
         <div className="p-3 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center space-x-2">
             <select
@@ -203,7 +203,7 @@ export default function Networks() {
           </div>
         </div>
 
-        {/* Tabla de Redes */}
+        {/* Tabla principal */}
         <div className="overflow-x-auto">
           <table className="w-full text-xs text-left border-collapse">
             <thead>
@@ -240,7 +240,6 @@ export default function Networks() {
                       <td className="p-2.5 border-r border-gray-200 font-medium text-gray-800">{net.name}</td>
                       <td className="p-2.5 border-r border-gray-200 font-mono text-gray-700">{net.network}</td>
                       <td className="p-2.5 border-r border-gray-200">
-                        {/* Barra de Progreso de IPs */}
                         <div className="relative w-full bg-gray-300 rounded-full h-4 overflow-hidden border border-gray-300">
                           <div
                             className="bg-gray-500 h-full transition-all duration-300"
@@ -274,7 +273,7 @@ export default function Networks() {
           </table>
         </div>
 
-        {/* Paginador Footer */}
+        {/* Footer con Paginación */}
         <div className="p-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
           <div>
             Mostrando de {filteredNetworks.length > 0 ? (currentPage - 1) * pageSize + 1 : 0} al{" "}
@@ -300,11 +299,10 @@ export default function Networks() {
         </div>
       </div>
 
-      {/* Modal Nueva / Editar Red IPv4 */}
+      {/* Modal Nueva / Editar Red */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden animate-fadeIn">
-            {/* Modal Header */}
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
               <h3 className="text-sm font-semibold text-gray-700">
                 {editingNet ? "Editar Red IPv4" : "Nueva Red IPv4"}
@@ -314,10 +312,8 @@ export default function Networks() {
               </button>
             </div>
 
-            {/* Modal Form */}
             <form onSubmit={handleSubmit}>
               <div className="p-5 space-y-4 text-xs">
-                {/* Campo Nombre */}
                 <div className="grid grid-cols-3 items-center gap-2">
                   <label className="text-right text-gray-600 font-medium">Nombre</label>
                   <div className="col-span-2">
@@ -332,7 +328,6 @@ export default function Networks() {
                   </div>
                 </div>
 
-                {/* Campo Router */}
                 <div className="grid grid-cols-3 items-center gap-2">
                   <label className="text-right text-gray-600 font-medium">Router</label>
                   <div className="col-span-2">
@@ -351,7 +346,6 @@ export default function Networks() {
                   </div>
                 </div>
 
-                {/* Campo Red con Icono */}
                 <div className="grid grid-cols-3 items-start gap-2">
                   <label className="text-right text-gray-600 font-medium pt-1.5">Red</label>
                   <div className="col-span-2">
@@ -372,7 +366,6 @@ export default function Networks() {
                   </div>
                 </div>
 
-                {/* Campo CIDR */}
                 <div className="grid grid-cols-3 items-center gap-2">
                   <label className="text-right text-gray-600 font-medium">CIDR</label>
                   <div className="col-span-2">
@@ -390,7 +383,6 @@ export default function Networks() {
                   </div>
                 </div>
 
-                {/* Campo Tipo de Uso */}
                 <div className="grid grid-cols-3 items-center gap-2">
                   <label className="text-right text-gray-600 font-medium">Tipo de Uso</label>
                   <div className="col-span-2">
@@ -407,7 +399,6 @@ export default function Networks() {
                 </div>
               </div>
 
-              {/* Modal Footer */}
               <div className="bg-gray-50 px-4 py-3 border-t border-gray-200 flex justify-end space-x-2">
                 <button
                   type="button"
