@@ -31,6 +31,11 @@ export const api = {
     update: (id, d) => request(`/routers/${id}`, { method: 'PUT', body: JSON.stringify(d) }),
     delete: (id) => request(`/routers/${id}`, { method: 'DELETE' }),
     sync: (id) => request(`/sync/${id}`, { method: 'POST' }),
+    info: (id) => request(`/routers/${id}/info`),
+    traffic: (id, iface) => request(`/routers/${id}/traffic/${iface}`),
+    applyTrafficFlow: (id) => request(`/routers/${id}/traffic-flow`, { method: 'POST', body: JSON.stringify({}) }),
+    applySecurityAlt: (id) => request(`/routers/${id}/security-alt`, { method: 'POST', body: JSON.stringify({}) }),
+    logs: (id) => request(`/routers/${id}/logs`),
   },
   clients: {
     list: () => request('/clients'),

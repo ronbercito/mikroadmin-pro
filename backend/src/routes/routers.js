@@ -11,6 +11,14 @@ router.get('/:id', async (req, res) => {
   if (!r) return res.status(404).json({ error: 'No encontrado' });
   res.json(r);
 });
+router.get('/:id/logs', async (req, res) => {
+  const logs = await prisma.changeLog.findMany({
+    where: { router_id: Number(req.params.id) },
+    orderBy: { id: 'desc' },
+    take: 100,
+  });
+  res.json(logs);
+});
 router.post('/', async (req, res) => res.json(await prisma.router.create({ data: req.body })));
 router.put('/:id', async (req, res) => res.json(await prisma.router.update({ where: { id: Number(req.params.id) }, data: req.body })));
 router.delete('/:id', async (req, res) => { await prisma.router.delete({ where: { id: Number(req.params.id) } }); res.json({ ok: true }); });

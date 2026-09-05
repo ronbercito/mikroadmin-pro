@@ -22,16 +22,20 @@ model Router {
   name             String
   router_type      String    @default("MikroTik")
   host             String
-  api_port         Int       @default(443)
-  use_tls          Boolean   @default(true)
+  api_port         Int       @default(8728)
+  use_tls          Boolean   @default(false)
   username         String
   password         String
   location         String?
-  security         String    @default("none")
+  model            String?
+  ros_version      String?
+  security         String    @default("none_accounting_api")
   security_alt     String    @default("none")
   radius_secret    String?
   radius_nas_ip    String?
   traffic_logging  String    @default("traffic_flow")
+  traffic_flow_target     String?
+  traffic_flow_interface  String?  @default("all")
   speed_control    String    @default("simple_queues")
   save_visited_ips Boolean   @default(true)
   status           String    @default("unknown")
@@ -40,6 +44,7 @@ model Router {
   created_at       DateTime  @default(now())
   updated_at       DateTime  @updatedAt
   clients          Client[]
+  change_logs      ChangeLog[]
 }
 
 model Client {
@@ -99,8 +104,8 @@ model BillingRecord {
 
 model ChangeLog {
   id           Int      @id @default(autoincrement())
-  client_id    Int
-  client       Client   @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  client_id    Int?
+  client       Client?  @relation(fields: [client_id], references: [id], onDelete: Cascade)
   client_name  String?
   change_type  String
   field        String?
@@ -109,5 +114,6 @@ model ChangeLog {
   description  String
   performed_by String?
   router_id    Int?
+  router       Router?  @relation(fields: [router_id], references: [id])
   created_at   DateTime @default(now())
 }
