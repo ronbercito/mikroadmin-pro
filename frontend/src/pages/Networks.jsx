@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { api } from "../api/client";
 import {
   Plus,
-  Search,
   RefreshCw,
   Maximize2,
   Minimize2,
@@ -15,8 +15,6 @@ import {
   List,
   Grid
 } from "lucide-react";
-
-const API_BASE_URL = "/api";
 
 const CIDR_OPTIONS = [
   { cidr: 24, label: "24 (255.255.255.0 - 254 hosts, 256 IP)" },
@@ -49,14 +47,28 @@ export default function Networks() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [netsRes, routersRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/networks`).then((r) => (r.ok ? r.json() : [])),
-        fetch(`${API_BASE_URL}/routers`).then((r) => (r.ok ? r.json() : [])),
-      ]);
+      // Cargar routers utilizando el cliente API autenticado
+      const routersRes = await api.routers.list().catch(() => []);
+      const loadedRouters = Array.isArray(routersRes) ? routersRes : [];
+      setRouters(loadedRouters);
+
+      // Cargar redes mediante el cliente API o fallback
+      let netsRes = [];
+      if (api.networks?.list) {
+        netsRes = await api.networks.list().catch(() => []);
+      } else {
+        const token = localStorage.getItem("token") || localStorage.getItem("auth_token");
+        const res = await fetch("/api/networks", {
+          headers: {
+            "Authorization": token ? `Bearer ${token}` : "",
+            "Content-Type": "application/json"
+          }
+        });
+        if (res.ok) netsRes = await res.json();
+      }
       setNetworks(Array.isArray(netsRes) ? netsRes : []);
-      setRouters(Array.isArray(routersRes) ? routersRes : []);
     } catch (error) {
-      console.error("Error al obtener redes/routers:", error);
+      console.error("Error al obtener datos:", error);
     } finally {
       setLoading(false);
     }
@@ -93,9 +105,10 @@ export default function Networks() {
       });
     } else {
       setEditingNet(null);
+      const defaultRouterId = routers.length > 0 ? (routers[0].id || routers[0]._id) : "";
       setFormData({
         name: "",
-        router_id: routers[0]?.id || "",
+        router_id: defaultRouterId,
         network: "",
         cidr: 24,
         type: "ESTÁTICO",
@@ -112,34 +125,36 @@ export default function Networks() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const url = editingNet
-        ? `${API_BASE_URL}/networks/${editingNet.id}`
-        : `${API_BASE_URL}/networks`;
+      const token = localStorage.getItem("token") || localStorage.getItem("auth_token");
+      const url = editingNet ? `/api/networks/${editingNet.id}` : "/api/networks";
       const method = editingNet ? "PUT" : "POST";
 
       const res = await fetch(url, {
         method,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Authorization": token ? `Bearer ${token}` : "",
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify(formData),
       });
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.message || "Error al procesar la solicitud");
-      }
+      if (!res.ok) throw new Error("Error en la operación");
 
       closeModal();
       fetchData();
     } catch (error) {
-      alert(error.message || "Error al guardar la red");
+      alert("Error al guardar la red IPv4");
     }
   };
 
   const handleDelete = async (id, name) => {
     if (window.confirm(`¿Está seguro de eliminar la red "${name}"?`)) {
       try {
-        const res = await fetch(`${API_BASE_URL}/networks/${id}`, { method: "DELETE" });
-        if (!res.ok) throw new Error("Error al eliminar");
+        const token = localStorage.getItem("token") || localStorage.getItem("auth_token");
+        await fetch(`/api/networks/${id}`, {
+          method: "DELETE",
+          headers: { "Authorization": token ? `Bearer ${token}` : "" }
+        });
         fetchData();
       } catch (error) {
         alert("Error al eliminar la red");
@@ -156,7 +171,7 @@ export default function Networks() {
     <div className="w-full font-sans text-gray-700 bg-gray-100 min-h-screen p-4">
       <div className="bg-white rounded-t shadow-sm border border-gray-200 overflow-hidden">
         
-        {/* Header Superior */}
+        {/* Header */}
         <div className="bg-[#0267a5] text-white px-4 py-2.5 flex items-center justify-between">
           <span className="font-medium text-sm">Redes IPv4</span>
           <div className="flex items-center space-x-2 text-white/80">
@@ -166,7 +181,7 @@ export default function Networks() {
           </div>
         </div>
 
-        {/* Toolbar Superior */}
+        {/* Toolbar */}
         <div className="p-3 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center space-x-2">
             <select
@@ -203,7 +218,7 @@ export default function Networks() {
           </div>
         </div>
 
-        {/* Tabla principal */}
+        {/* Tabla */}
         <div className="overflow-x-auto">
           <table className="w-full text-xs text-left border-collapse">
             <thead>
@@ -232,7 +247,7 @@ export default function Networks() {
                   const totalHosts = getHostsCount(net.cidr);
                   const usedHosts = net.used_ips || 0;
                   const percentage = ((usedHosts / totalHosts) * 100).toFixed(1);
-                  const router = routers.find((r) => r.id === net.router_id);
+                  const router = routers.find((r) => String(r.id || r._id) === String(net.router_id));
 
                   return (
                     <tr key={net.id || index} className="hover:bg-gray-50 transition-colors">
@@ -251,7 +266,7 @@ export default function Networks() {
                         </div>
                       </td>
                       <td className="p-2.5 border-r border-gray-200">{net.cidr}</td>
-                      <td className="p-2.5 border-r border-gray-200">{router ? router.name : net.router_name || "CCR2004"}</td>
+                      <td className="p-2.5 border-r border-gray-200">{router ? (router.name || router.nombre) : net.router_name || "Sin router"}</td>
                       <td className="p-2.5 border-r border-gray-200">
                         <span className="bg-[#007a87] text-white text-[10px] px-2 py-0.5 rounded font-semibold uppercase">
                           {net.type || "ESTÁTICO"}
@@ -261,7 +276,7 @@ export default function Networks() {
                         <div className="flex items-center justify-center space-x-1.5 text-gray-600">
                           <button onClick={() => openModal(net)} className="hover:text-blue-600" title="Editar"><Pencil size={14} /></button>
                           <button className="hover:text-blue-600" title="Información"><Info size={14} /></button>
-                          <button className="hover:text-blue-600" title="Arbol de Clientes"><Network size={14} /></button>
+                          <button className="hover:text-blue-600" title="Árbol de Clientes"><Network size={14} /></button>
                           <button onClick={() => handleDelete(net.id, net.name)} className="hover:text-red-600" title="Eliminar"><Trash2 size={14} /></button>
                         </div>
                       </td>
@@ -273,7 +288,7 @@ export default function Networks() {
           </table>
         </div>
 
-        {/* Footer con Paginación */}
+        {/* Pagination */}
         <div className="p-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
           <div>
             Mostrando de {filteredNetworks.length > 0 ? (currentPage - 1) * pageSize + 1 : 0} al{" "}
@@ -299,7 +314,7 @@ export default function Networks() {
         </div>
       </div>
 
-      {/* Modal Nueva / Editar Red */}
+      {/* Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden">
@@ -332,14 +347,15 @@ export default function Networks() {
                   <label className="text-right text-gray-600 font-medium">Router</label>
                   <div className="col-span-2">
                     <select
+                      required
                       value={formData.router_id}
                       onChange={(e) => setFormData({ ...formData, router_id: e.target.value })}
                       className="w-full border border-gray-300 rounded px-2.5 py-1.5 bg-white text-gray-700 focus:outline-none focus:border-blue-500"
                     >
                       <option value="">Seleccionar...</option>
                       {routers.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {r.name}
+                        <option key={r.id || r._id} value={r.id || r._id}>
+                          {r.name || r.nombre || r.ip || `Router ${r.id}`}
                         </option>
                       ))}
                     </select>
