@@ -1,0 +1,113 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String
+  full_name String?
+  role      String   @default("admin")
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+model Router {
+  id               Int       @id @default(autoincrement())
+  name             String
+  router_type      String    @default("MikroTik")
+  host             String
+  api_port         Int       @default(443)
+  use_tls          Boolean   @default(true)
+  username         String
+  password         String
+  location         String?
+  security         String    @default("none")
+  security_alt     String    @default("none")
+  radius_secret    String?
+  radius_nas_ip    String?
+  traffic_logging  String    @default("traffic_flow")
+  speed_control    String    @default("simple_queues")
+  save_visited_ips Boolean   @default(true)
+  status           String    @default("unknown")
+  last_sync         DateTime?
+  notes            String?
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @updatedAt
+  clients          Client[]
+}
+
+model Client {
+  id               Int        @id @default(autoincrement())
+  full_name        String
+  document_id      String?
+  phone            String?
+  email            String?
+  address          String?
+  router_id        Int?
+  router           Router?    @relation(fields: [router_id], references: [id])
+  router_name      String?
+  connection_type  String     @default("dhcp")
+  ip_address       String?
+  mac_address      String?
+  pppoe_user       String?
+  pppoe_password   String?
+  plan_name        String?
+  plan_speed_down  String?
+  plan_speed_up    String?
+  monthly_fee      Float?
+  currency         String     @default("PEN")
+  billing_day      Int        @default(1)
+  due_day          Int        @default(10)
+  status           String     @default("active")
+  suspended_reason String?
+  suspended_at     DateTime?
+  last_payment_date DateTime?
+  next_due_date     DateTime?
+  auto_cutoff      Boolean    @default(true)
+  install_date     DateTime?
+  notes            String?
+  created_at       DateTime   @default(now())
+  updated_at       DateTime   @updatedAt
+  billing_records  BillingRecord[]
+  change_logs      ChangeLog[]
+}
+
+model BillingRecord {
+  id          Int       @id @default(autoincrement())
+  client_id   Int
+  client      Client    @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  client_name String?
+  period      String
+  amount      Float
+  currency    String    @default("PEN")
+  issue_date  DateTime?
+  due_date    DateTime
+  paid_date   DateTime?
+  status      String    @default("pending")
+  method      String?
+  reference   String?
+  notes       String?
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+}
+
+model ChangeLog {
+  id           Int      @id @default(autoincrement())
+  client_id    Int
+  client       Client   @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  client_name  String?
+  change_type  String
+  field        String?
+  old_value    String?
+  new_value    String?
+  description  String
+  performed_by String?
+  router_id    Int?
+  created_at   DateTime @default(now())
+}
