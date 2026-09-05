@@ -35,12 +35,15 @@ cp -r "$SCRIPT_DIR/frontend" "$APP_DIR/"
 echo "[3/8] Base de datos MariaDB..."
 systemctl enable --now mariadb
 mariadb -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-mariadb -e "CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';"
-mariadb -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost'; FLUSH PRIVILEGES;"
+mariadb -e "DROP USER IF EXISTS '$DB_USER'@'localhost';"
+mariadb -e "CREATE USER '$DB_USER'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('$DB_PASS');"
+mariadb -e "DROP USER IF EXISTS '$DB_USER'@'127.0.0.1';"
+mariadb -e "CREATE USER '$DB_USER'@'127.0.0.1' IDENTIFIED VIA mysql_native_password USING PASSWORD('$DB_PASS');"
+mariadb -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost', '$DB_USER'@'127.0.0.1'; FLUSH PRIVILEGES;"
 
 echo "[4/8] Backend: dependencias, esquema y admin..."
 cat > "$APP_DIR/backend/.env" <<EOF
-DATABASE_URL="mysql://$DB_USER:$DB_PASS@localhost:3306/$DB_NAME"
+DATABASE_URL="mysql://$DB_USER:$DB_PASS@127.0.0.1:3306/$DB_NAME"
 JWT_SECRET="$JWT_SECRET"
 JWT_EXPIRES_IN="8h"
 JWT_REFRESH_SECRET="$JWT_REFRESH"
