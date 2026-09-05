@@ -14,6 +14,27 @@ function formatBytes(bytes) {
   return `${val < 10 ? val.toFixed(1) : Math.round(val)} ${sizes[i]}`;
 }
 
+// Extrae automáticamente valores numéricos de cualquier formato de respuesta MikroTik
+function extractBps(obj, keys) {
+  if (!obj || typeof obj !== 'object') return 0;
+  if (Array.isArray(obj)) obj = obj[0] || {};
+  if (obj.data) return extractBps(obj.data, keys);
+  if (obj.traffic) return extractBps(obj.traffic, keys);
+  if (obj.result) return extractBps(obj.result, keys);
+
+  for (const key of keys) {
+    if (obj[key] !== undefined && obj[key] !== null) {
+      const val = Number(obj[key]);
+      if (!isNaN(val)) {
+        // Si la propiedad devuelve Bytes/s en lugar de Bits/s, convertir a Bits/s
+        if (key.includes('byte')) return val * 8;
+        return val;
+      }
+    }
+  }
+  return 0;
+}
+
 export default function MikrotikTab({ routerId }) {
   const [sysInfo, setSysInfo] = useState(null);
   const [interfaces, setInterfaces] = useState([]);
@@ -81,16 +102,19 @@ export default function MikrotikTab({ routerId }) {
     try {
       const res = await api.routers.traffic(routerId, selectedIface);
       
+      // Imprime en la consola F12 para ver la estructura exacta devuelta por el servidor
+      console.log('Respuesta API Traffic:', res);
+
       if (res) {
-        // Desenvolver respuesta si el backend retorna un Array o un objeto anidado
-        const dataObj = Array.isArray(res) ? res[0] : (res.data ? (Array.isArray(res.data) ? res.data[0] : res.data) : res);
+        const txKeys = ['tx-bits-per-second', 'tx_bits_per_second', 'tx_bps', 'tx-bps', 'tx', 'tx-byte-rate', 'tx_byte_rate'];
+        const rxKeys = ['rx-bits-per-second', 'rx_bits_per_second', 'rx_bps', 'rx-bps', 'rx', 'rx-byte-rate', 'rx_byte_rate'];
 
-        // Mapeo flexible de claves de MikroTik RouterOS
-        const rawTx = dataObj?.['tx-bits-per-second'] ?? dataObj?.tx_bps ?? dataObj?.tx ?? 0;
-        const rawRx = dataObj?.['rx-bits-per-second'] ?? dataObj?.rx_bps ?? dataObj?.rx ?? 0;
+        const rawTx = extractBps(res, txKeys);
+        const rawRx = extractBps(res, rxKeys);
 
-        const tx = Math.round(((Number(rawTx) || 0) / 1000000) * 100) / 100;
-        const rx = Math.round(((Number(rawRx) || 0) / 1000000) * 100) / 100;
+        // Conversión a Mbps (bits / 1,000,000)
+        const tx = Math.round((rawTx / 1000000) * 100) / 100;
+        const rx = Math.round((rawRx / 1000000) * 100) / 100;
 
         const timeLabel = new Date().toLocaleTimeString('es-PE', { hour12: false });
 
@@ -160,15 +184,13 @@ export default function MikrotikTab({ routerId }) {
         </div>
       </div>
 
-      {/* Panel Derecho: Tráfico Actual estilo Imagen 2 */}
+      {/* Panel Derecho: Tráfico Actual */}
       <div className="lg:col-span-8 bg-white border border-slate-300 rounded shadow-sm overflow-hidden">
-        {/* Cabecera del Panel */}
         <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5 flex items-center justify-between">
           <h2 className="text-xs font-semibold text-slate-700">Tráfico Actual</h2>
         </div>
 
         <div className="p-4">
-          {/* Selector de Interfaz */}
           <div className="flex items-center justify-end gap-3 mb-3">
             <span className="text-xs text-slate-700 font-medium">Seleccionar Interface</span>
             <select
@@ -182,8 +204,7 @@ export default function MikrotikTab({ routerId }) {
             </select>
           </div>
 
-          {/* Gráfica con borde y leyendas integradas */}
-          <div className="relative border border-slate-400 p-2 bg-white rounded-sm">
+          <div className="relative border border-slate-300 p-2 bg-white rounded-sm">
             {trafficData.length === 0 ? (
               <div className="h-[320px] flex items-center justify-center">
                 <p className="text-xs text-slate-400">Recopilando datos de tráfico…</p>
@@ -192,7 +213,7 @@ export default function MikrotikTab({ routerId }) {
               <>
                 <ResponsiveContainer width="100%" height={320}>
                   <LineChart data={trafficData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                    <CartesianGrid stroke="#e2e8f0" strokeDasharray="0" />
+                    <CartesianGrid stroke="#e2e8f0" strokeDasharray="1 1" />
                     <XAxis dataKey="time" hide={true} />
                     <YAxis
                       tick={{ fontSize: 10, fill: '#334155' }}
@@ -208,7 +229,6 @@ export default function MikrotikTab({ routerId }) {
                   </LineChart>
                 </ResponsiveContainer>
 
-                {/* Recuadro flotante con valores de TX y RX (igual a la imagen 2) */}
                 <div className="absolute bottom-6 left-12 bg-slate-800/90 text-white text-[11px] px-3 py-1.5 rounded shadow flex flex-col gap-1 border border-slate-700">
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-sky-500"></span>
