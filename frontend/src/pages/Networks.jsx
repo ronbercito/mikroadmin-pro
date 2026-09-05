@@ -15,7 +15,6 @@ import {
   Grid
 } from "lucide-react";
 
-// Utiliza la variable de entorno del instalador (/admin/api)
 const API_BASE = import.meta.env.VITE_API_URL || "/admin/api";
 
 const CIDR_OPTIONS = [
@@ -27,6 +26,15 @@ const CIDR_OPTIONS = [
   { cidr: 29, label: "29 (255.255.255.248 - 6 hosts, 8 IP)" },
   { cidr: 30, label: "30 (255.255.255.252 - 2 hosts, 4 IP)" },
 ];
+
+// Helper para extraer arrays sin importar si la API responde array directo u objeto { data: [...] }
+const extractArray = (resData, key) => {
+  if (Array.isArray(resData)) return resData;
+  if (resData && Array.isArray(resData[key])) return resData[key];
+  if (resData && Array.isArray(resData.data)) return resData.data;
+  if (resData && Array.isArray(resData.rows)) return resData.rows;
+  return [];
+};
 
 export default function Networks() {
   const [networks, setNetworks] = useState([]);
@@ -62,14 +70,17 @@ export default function Networks() {
         fetch(`${API_BASE}/networks`, { headers: getHeaders() })
       ]);
 
-      const routersData = routersRes.ok ? await routersRes.json() : [];
-      const netsData = netsRes.ok ? await netsRes.json() : [];
+      const routersRaw = routersRes.ok ? await routersRes.json() : [];
+      const netsRaw = netsRes.ok ? await netsRes.json() : [];
 
-      setRouters(Array.isArray(routersData) ? routersData : []);
-      setNetworks(Array.isArray(netsData) ? netsData : []);
+      const parsedRouters = extractArray(routersRaw, "routers");
+      const parsedNets = extractArray(netsRaw, "networks");
+
+      setRouters(parsedRouters);
+      setNetworks(parsedNets);
     } catch (error) {
       console.error("Error al obtener datos:", error);
-    } finally {
+    } fontally {
       setLoading(false);
     }
   };
@@ -98,17 +109,16 @@ export default function Networks() {
       setEditingNet(net);
       setFormData({
         name: net.name || "",
-        router_id: net.router_id || net.routerId ? String(net.router_id || net.routerId) : "",
+        router_id: String(net.router_id || net.routerId || (routers[0]?.id || "")),
         network: net.network || "",
         cidr: net.cidr || 24,
         type: net.type || "ESTÁTICO",
       });
     } else {
       setEditingNet(null);
-      const defaultRouterId = routers.length > 0 ? String(routers[0].id) : "";
       setFormData({
         name: "",
-        router_id: defaultRouterId,
+        router_id: routers.length > 0 ? String(routers[0].id) : "",
         network: "",
         cidr: 24,
         type: "ESTÁTICO",
@@ -126,13 +136,12 @@ export default function Networks() {
     e.preventDefault();
     try {
       const parsedRouterId = parseInt(formData.router_id, 10);
-      
-      if (isNaN(parsedRouterId)) {
-        alert("Seleccione un router válido");
+
+      if (!parsedRouterId || isNaN(parsedRouterId)) {
+        alert("Seleccione un router válido o registre uno primero.");
         return;
       }
 
-      // Payload compatible con Prisma ORM (acepta camelCase y snake_case)
       const payload = {
         name: formData.name.trim(),
         router_id: parsedRouterId,
@@ -162,7 +171,7 @@ export default function Networks() {
       fetchData();
     } catch (error) {
       console.error("Error al guardar red:", error);
-      alert(error.message || "Error al guardar la red IPv4 en MariaDB");
+      alert(error.message || "Error al guardar la red IPv4");
     }
   };
 
@@ -285,7 +294,7 @@ export default function Networks() {
                         </div>
                       </td>
                       <td className="p-2.5 border-r border-gray-200">{net.cidr}</td>
-                      <td className="p-2.5 border-r border-gray-200">{router ? router.name : net.router_name || "Sin router"}</td>
+                      <td className="p-2.5 border-r border-gray-200">{router ? (router.name || router.nombre || router.ip) : (net.router_name || net.routerName || "Sin router")}</td>
                       <td className="p-2.5 border-r border-gray-200">
                         <span className="bg-[#007a87] text-white text-[10px] px-2 py-0.5 rounded font-semibold uppercase">
                           {net.type || "ESTÁTICO"}
@@ -372,11 +381,17 @@ export default function Networks() {
                       className="w-full border border-gray-300 rounded px-2.5 py-1.5 bg-white text-gray-700 focus:outline-none focus:border-blue-500"
                     >
                       <option value="">Seleccionar...</option>
-                      {routers.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {r.name || r.ip || `Router ${r.id}`}
+                      {routers.length === 0 ? (
+                        <option value="" disabled>
+                          -- Sin routers registrados en BD --
                         </option>
-                      ))}
+                      ) : (
+                        routers.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name || r.nombre || r.ip || `Router ID ${r.id}`}
+                          </option>
+                        ))
+                      )}
                     </select>
                   </div>
                 </div>
