@@ -3,7 +3,6 @@ import { api } from '../api/client';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Loader2, RefreshCw } from 'lucide-react';
 
-// Función para convertir Bytes a KiB, MiB o GiB automáticamente
 function formatBytes(bytes) {
   if (bytes === undefined || bytes === null || bytes === '') return '—';
   const num = Number(bytes);
@@ -23,19 +22,32 @@ export default function MikrotikTab({ routerId }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [polling, setPolling] = useState(false);
-  const pollRef = useRef(null);
+
+  const trafficPollRef = useRef(null);
+  const infoPollRef = useRef(null);
 
   useEffect(() => {
     loadInitialData();
   }, [routerId]);
 
+  // Intervalo para información general (cada 10 segundos para no saturar)
+  useEffect(() => {
+    infoPollRef.current = setInterval(fetchSystemInfo, 10000);
+    return () => {
+      if (infoPollRef.current) clearInterval(infoPollRef.current);
+    };
+  }, [routerId]);
+
+  // Intervalo para tráfico (cada 2 segundos)
   useEffect(() => {
     if (!selectedIface) return;
     setTrafficData([]);
-    pollData();
-    pollRef.current = setInterval(pollData, 2000);
+    
+    pollTraffic();
+    trafficPollRef.current = setInterval(pollTraffic, 2000);
+
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      if (trafficPollRef.current) clearInterval(trafficPollRef.current);
     };
   }, [selectedIface]);
 
@@ -55,28 +67,37 @@ export default function MikrotikTab({ routerId }) {
     setLoading(false);
   }
 
-  const pollData = useCallback(async () => {
+  async function fetchSystemInfo() {
+    try {
+      const res = await api.routers.info(routerId);
+      if (res?.system_info) {
+        setSysInfo(res.system_info);
+      }
+    } catch (e) {
+      console.error('Error al actualizar sysInfo:', e);
+    }
+  }
+
+  const pollTraffic = useCallback(async () => {
     if (!selectedIface) return;
     setPolling(true);
     try {
-      const [trafficRes, infoRes] = await Promise.allSettled([
-        api.routers.traffic(routerId, selectedIface),
-        api.routers.info(routerId)
-      ]);
-
-      if (trafficRes.status === 'fulfilled' && trafficRes.value) {
-        const res = trafficRes.value;
+      const res = await api.routers.traffic(routerId, selectedIface);
+      
+      if (res) {
         const timeLabel = new Date().toLocaleTimeString('es-PE', { hour12: false });
-        const tx = Math.round(((res.tx_bps || 0) / 1000000) * 100) / 100;
-        const rx = Math.round(((res.rx_bps || 0) / 1000000) * 100) / 100;
+
+        // Detección flexible de nombres de atributos recibidos del backend
+        const rawTx = res.tx_bps ?? res['tx-bits-per-second'] ?? res.tx ?? 0;
+        const rawRx = res.rx_bps ?? res['rx-bits-per-second'] ?? res.rx ?? 0;
+
+        const tx = Math.round(((Number(rawTx) || 0) / 1000000) * 100) / 100;
+        const rx = Math.round(((Number(rawRx) || 0) / 1000000) * 100) / 100;
+
         setTrafficData((prev) => [...prev, { time: timeLabel, tx, rx }].slice(-20));
       }
-
-      if (infoRes.status === 'fulfilled' && infoRes.value?.system_info) {
-        setSysInfo(infoRes.value.system_info);
-      }
     } catch (e) {
-      console.error('Error al actualizar datos:', e);
+      console.error('Error al obtener tráfico:', e);
     }
     setPolling(false);
   }, [routerId, selectedIface]);
@@ -104,7 +125,7 @@ export default function MikrotikTab({ routerId }) {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 bg-slate-100 min-h-screen font-sans">
-      {/* Panel Izquierdo: Información especificada del Router */}
+      {/* Panel Izquierdo: Información del Router */}
       <div className="lg:col-span-4 bg-white border border-slate-300 rounded shadow-sm overflow-hidden text-xs">
         <div className="divide-y divide-slate-100">
           <InfoRow label="uptime" value={sysInfo?.uptime} isZebra={true} />
@@ -117,7 +138,6 @@ export default function MikrotikTab({ routerId }) {
           <InfoRow label="cpu-count" value={sysInfo?.['cpu-count']} />
           <InfoRow label="cpu-frequency" value={sysInfo?.['cpu-frequency']} isZebra={true} />
           
-          {/* Fila CPU Load con barra horizontal */}
           <div className="flex items-center py-1.5 px-3 bg-white">
             <div className="w-36 text-right pr-2 text-slate-600 font-normal">cpu-load</div>
             <div className="flex-1 flex items-center gap-2">
@@ -168,7 +188,6 @@ export default function MikrotikTab({ routerId }) {
                 <YAxis
                   tick={{ fontSize: 10, fill: '#64748b' }}
                   tickFormatter={(v) => `${v.toFixed(2)} Mbps`}
-                  domain={[0, 'auto']}
                 />
                 <Tooltip
                   contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155', borderRadius: '4px', fontSize: '11px', color: '#fff' }}
