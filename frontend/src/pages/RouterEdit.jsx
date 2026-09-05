@@ -94,36 +94,6 @@ export default function RouterEdit() {
                   <FF label="Tipo Router"><select value={form.router_type} onChange={(e) => set('router_type', e.target.value)} className="form-input"><option>MikroTik</option><option>Ubiquiti</option><option>Cisco</option><option>Otro</option></select></FF>
                   <FF label="Ubicación"><div className="relative"><input value={form.location} onChange={(e) => set('location', e.target.value)} placeholder="lat,long" className="form-input pr-9" /><MapPin className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" /></div></FF>
                   <FF label="IP / Host"><input value={form.host} onChange={(e) => set('host', e.target.value)} required className="form-input" /></FF>
-                  
-                  {/* Campos añadidos para Puerto API y TLS */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <FF label="Puerto API">
-                      <input 
-                        type="number" 
-                        value={form.api_port} 
-                        onChange={(e) => set('api_port', Number(e.target.value))} 
-                        className="form-input" 
-                      />
-                    </FF>
-                    <FF label="Usar TLS (SSL)">
-                      <select 
-                        value={String(form.use_tls)} 
-                        onChange={(e) => {
-                          const isTls = e.target.value === 'true';
-                          setForm((f) => ({
-                            ...f,
-                            use_tls: isTls,
-                            api_port: isTls ? 8729 : 8728
-                          }));
-                        }} 
-                        className="form-input"
-                      >
-                        <option value="false">No (API - 8728)</option>
-                        <option value="true">Sí (API-SSL - 8729)</option>
-                      </select>
-                    </FF>
-                  </div>
-
                   <FF label="Seguridad"><select value={form.security} onChange={(e) => set('security', e.target.value)} className="form-input"><option value="none_accounting_api">Ninguno / Accounting API</option><option value="ppp_accounting_api">PPP / Accounting API</option></select></FF>
                   <FF label="Seguridad alterna">
                     <select

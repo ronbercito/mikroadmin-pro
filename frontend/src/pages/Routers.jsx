@@ -79,17 +79,6 @@ export default function Routers() {
     try {
       const res = await api.routers.test(id);
       setDiag(res);
-      
-      // Si el diagnóstico extrajo con éxito el 'board' o 'model', actualizamos localmente la tabla
-      if (res?.api?.ok && res?.api?.board) {
-        setRouters((prev) =>
-          prev.map((r) =>
-            r.id === id
-              ? { ...r, model: res.api.board || r.model, ros_version: res.api.version || r.ros_version }
-              : r
-          )
-        );
-      }
     } catch (e) {
       setDiag({ tcp: { ok: false, error: e.message }, api: { ok: false, error: e.message } });
     }
@@ -182,8 +171,7 @@ export default function Routers() {
                     <p className="text-xs text-[#f39c12] mt-0.5">API + {speedLabels[r.speed_control] || 'Colas Simples'}</p>
                   </td>
                   <td className="px-4 py-3.5 text-sm text-slate-600">{r.host}</td>
-                  {/* Evaluación múltiple para asegurar que si viene model, board_model, board o board_name se muestre correctamente */}
-                  <td className="px-4 py-3.5 text-sm text-slate-600">{r.model || r.board_model || r.board || r.board_name || '—'}</td>
+                  <td className="px-4 py-3.5 text-sm text-slate-600">{r.model || '—'}</td>
                   <td className="px-4 py-3.5 text-sm text-slate-600">{r.ros_version || '—'}</td>
                   <td className="px-4 py-3.5 text-center">
                     <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-slate-200 text-slate-600 text-xs font-medium">

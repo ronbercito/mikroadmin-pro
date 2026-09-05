@@ -8,7 +8,6 @@ import RouterEdit from './pages/RouterEdit';
 import Clients from './pages/Clients';
 import ClientDetail from './pages/ClientDetail';
 import Ajustes from './pages/Ajustes';
-import RedesIPv4 from './pages/RedesIPv4'; // 1. Importas tu componente
 import Placeholder from './pages/Placeholder';
 
 export default function App() {
@@ -23,7 +22,6 @@ export default function App() {
           <Route path="/clients" element={<Clients />} />
           <Route path="/clients/:id" element={<ClientDetail />} />
           <Route path="/ajustes" element={<Ajustes />} />
-          <Route path="/admin/gestion/redes-ipv4" element={<RedesIPv4 />} /> {/* 2. Agregas la ruta exacta */}
           <Route path="*" element={<Placeholder />} />
         </Route>
       </Route>
