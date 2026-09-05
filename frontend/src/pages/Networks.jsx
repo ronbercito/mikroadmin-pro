@@ -47,15 +47,15 @@ export default function Networks() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      // Cargar routers utilizando el cliente API autenticado
       const routersRes = await api.routers.list().catch(() => []);
       const loadedRouters = Array.isArray(routersRes) ? routersRes : [];
       setRouters(loadedRouters);
 
-      // Cargar redes mediante el cliente API o fallback
       let netsRes = [];
       if (api.networks?.list) {
         netsRes = await api.networks.list().catch(() => []);
+      } else if (api.get) {
+        netsRes = await api.get("/networks").catch(() => []);
       } else {
         const token = localStorage.getItem("token") || localStorage.getItem("auth_token");
         const res = await fetch("/api/networks", {
@@ -98,14 +98,14 @@ export default function Networks() {
       setEditingNet(net);
       setFormData({
         name: net.name || "",
-        router_id: net.router_id || "",
+        router_id: net.router_id ? String(net.router_id) : "",
         network: net.network || "",
         cidr: net.cidr || 24,
         type: net.type || "ESTÁTICO",
       });
     } else {
       setEditingNet(null);
-      const defaultRouterId = routers.length > 0 ? (routers[0].id || routers[0]._id) : "";
+      const defaultRouterId = routers.length > 0 ? String(routers[0].id || routers[0]._id || "") : "";
       setFormData({
         name: "",
         router_id: defaultRouterId,
@@ -125,36 +125,86 @@ export default function Networks() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const token = localStorage.getItem("token") || localStorage.getItem("auth_token");
-      const url = editingNet ? `/api/networks/${editingNet.id}` : "/api/networks";
-      const method = editingNet ? "PUT" : "POST";
+      // Normalización de datos para la BD
+      const parsedRouterId = parseInt(formData.router_id, 10);
+      
+      if (isNaN(parsedRouterId)) {
+        alert("Seleccione un router válido");
+        return;
+      }
 
-      const res = await fetch(url, {
-        method,
-        headers: {
-          "Authorization": token ? `Bearer ${token}` : "",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(formData),
-      });
+      const payload = {
+        name: formData.name.trim(),
+        router_id: parsedRouterId,
+        network: formData.network.trim(),
+        cidr: Number(formData.cidr),
+        type: formData.type
+      };
 
-      if (!res.ok) throw new Error("Error en la operación");
+      if (editingNet) {
+        if (api.networks?.update) {
+          await api.networks.update(editingNet.id, payload);
+        } else if (api.put) {
+          await api.put(`/networks/${editingNet.id}`, payload);
+        } else {
+          const token = localStorage.getItem("token") || localStorage.getItem("auth_token");
+          const res = await fetch(`/api/networks/${editingNet.id}`, {
+            method: "PUT",
+            headers: {
+              "Authorization": token ? `Bearer ${token}` : "",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.message || "Error al actualizar la red en la base de datos");
+          }
+        }
+      } else {
+        if (api.networks?.create) {
+          await api.networks.create(payload);
+        } else if (api.post) {
+          await api.post("/networks", payload);
+        } else {
+          const token = localStorage.getItem("token") || localStorage.getItem("auth_token");
+          const res = await fetch("/api/networks", {
+            method: "POST",
+            headers: {
+              "Authorization": token ? `Bearer ${token}` : "",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.message || "Error al guardar en la base de datos");
+          }
+        }
+      }
 
       closeModal();
       fetchData();
     } catch (error) {
-      alert("Error al guardar la red IPv4");
+      console.error("Error al guardar red:", error);
+      alert(error.message || "Error al guardar la red IPv4 en la base de datos");
     }
   };
 
   const handleDelete = async (id, name) => {
     if (window.confirm(`¿Está seguro de eliminar la red "${name}"?`)) {
       try {
-        const token = localStorage.getItem("token") || localStorage.getItem("auth_token");
-        await fetch(`/api/networks/${id}`, {
-          method: "DELETE",
-          headers: { "Authorization": token ? `Bearer ${token}` : "" }
-        });
+        if (api.networks?.delete) {
+          await api.networks.delete(id);
+        } else if (api.delete) {
+          await api.delete(`/networks/${id}`);
+        } else {
+          const token = localStorage.getItem("token") || localStorage.getItem("auth_token");
+          await fetch(`/api/networks/${id}`, {
+            method: "DELETE",
+            headers: { "Authorization": token ? `Bearer ${token}` : "" }
+          });
+        }
         fetchData();
       } catch (error) {
         alert("Error al eliminar la red");
@@ -288,7 +338,7 @@ export default function Networks() {
           </table>
         </div>
 
-        {/* Pagination */}
+        {/* Paginación */}
         <div className="p-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
           <div>
             Mostrando de {filteredNetworks.length > 0 ? (currentPage - 1) * pageSize + 1 : 0} al{" "}
