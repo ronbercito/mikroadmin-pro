@@ -127,16 +127,19 @@ async function connect(router) {
   const useTls = router.use_tls === true;
   const port = router.api_port || (useTls ? 8729 : 8728);
   return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Timeout de conexión (10s)')), 10000);
     if (useTls) {
       const sock = tls.connect(port, router.host, { rejectUnauthorized: false }, () => {
+        clearTimeout(timer);
         sock.setTimeout(15000);
         resolve(new RouterOSConnection(sock));
       });
-      sock.on('error', reject);
+      sock.on('error', (err) => { clearTimeout(timer); reject(err); });
     } else {
       const sock = new net.Socket();
-      sock.on('error', reject);
+      sock.on('error', (err) => { clearTimeout(timer); reject(err); });
       sock.connect(port, router.host, () => {
+        clearTimeout(timer);
         sock.setTimeout(15000);
         resolve(new RouterOSConnection(sock));
       });
