@@ -27,7 +27,6 @@ const CIDR_OPTIONS = [
   { cidr: 30, label: "30 (255.255.255.252 - 2 hosts, 4 IP)" },
 ];
 
-// Extractor universal de arrays para cualquier formato JSON de respuesta
 const extractArray = (resData) => {
   if (!resData) return [];
   if (Array.isArray(resData)) return resData;
@@ -62,18 +61,40 @@ export default function Networks() {
     type: "ESTÁTICO",
   });
 
+  // Extrae el token escaneando todas las claves posibles de localStorage
   const getHeaders = () => {
-    const token = localStorage.getItem("token") || localStorage.getItem("auth_token") || "";
-    return {
-      "Content-Type": "application/json",
-      "Authorization": token ? `Bearer ${token}` : ""
-    };
+    let token =
+      localStorage.getItem("token") ||
+      localStorage.getItem("auth_token") ||
+      localStorage.getItem("access_token") ||
+      localStorage.getItem("jwt") ||
+      "";
+
+    if (!token) {
+      try {
+        const userObj = JSON.parse(
+          localStorage.getItem("user") ||
+          localStorage.getItem("authUser") ||
+          "{}"
+        );
+        token = userObj.token || userObj.access_token || userObj.jwt || "";
+      } catch (e) {}
+    }
+
+    const headers = { "Content-Type": "application/json" };
+    if (token) {
+      headers["Authorization"] = token.startsWith("Bearer ") ? token : `Bearer ${token}`;
+    }
+    return headers;
   };
 
   const fetchRouters = async () => {
     try {
       const res = await fetch(`${API_BASE}/routers`, { headers: getHeaders() });
-      if (!res.ok) return [];
+      if (!res.ok) {
+        console.warn(`Respuesta router HTTP ${res.status}`);
+        return [];
+      }
       const raw = await res.json();
       const list = extractArray(raw);
       setRouters(list);
@@ -84,18 +105,32 @@ export default function Networks() {
     }
   };
 
+  const fetchNetworksApi = async () => {
+    // Prueba /networks y como fallback /network por si el backend usa singular
+    try {
+      let res = await fetch(`${API_BASE}/networks`, { headers: getHeaders() });
+      if (res.status === 404) {
+        res = await fetch(`${API_BASE}/network`, { headers: getHeaders() });
+      }
+      if (!res.ok) return [];
+      const raw = await res.json();
+      return extractArray(raw);
+    } catch (e) {
+      console.error("Error al obtener redes:", e);
+      return [];
+    }
+  };
+
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [currentRouters, netsRes] = await Promise.all([
+      const [currentRouters, currentNets] = await Promise.all([
         fetchRouters(),
-        fetch(`${API_BASE}/networks`, { headers: getHeaders() })
+        fetchNetworksApi()
       ]);
-
-      const netsRaw = netsRes.ok ? await netsRes.json() : [];
-      setNetworks(extractArray(netsRaw));
+      setNetworks(currentNets);
     } catch (error) {
-      console.error("Error al obtener datos:", error);
+      console.error("Error al actualizar tabla:", error);
     } finally {
       setLoading(false);
     }
@@ -121,7 +156,6 @@ export default function Networks() {
   }, [filteredNetworks, currentPage, pageSize]);
 
   const openModal = async (net = null) => {
-    // Al abrir modal refrescamos lista de routers actualizados
     const currentRouters = await fetchRouters();
 
     if (net) {
@@ -175,9 +209,8 @@ export default function Networks() {
         type: formData.type
       };
 
-      const url = editingNet
-        ? `${API_BASE}/networks/${editingNet.id}`
-        : `${API_BASE}/networks`;
+      const endpoint = editingNet ? `networks/${editingNet.id}` : "networks";
+      const url = `${API_BASE}/${endpoint}`;
       const method = editingNet ? "PUT" : "POST";
 
       const res = await fetch(url, {
