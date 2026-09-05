@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { Plus, Search, Loader2, Trash2, Pencil, Power } from 'lucide-react';
-import { Modal } from './Routers';
+import Modal from '../components/Modal';
 
 const empty = {
   full_name: '', document_id: '', phone: '', email: '', address: '',
