@@ -1,175 +1,437 @@
-import React, { useState } from 'react';
+import { useEffect, useState } from "react";
+import { base44 } from "@/api/base44Client";
+import Layout from "@/components/Layout";
+import NetworkForm from "@/components/NetworkForm";
+import NetworkInfoDialog from "@/components/NetworkInfoDialog";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Plus,
+  Search,
+  RefreshCw,
+  Maximize2,
+  Minimize2,
+  Pencil,
+  Info,
+  Network as NetworkTreeIcon,
+  Trash2,
+  ChevronLeft,
+  ChevronRight,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  Router as RouterIcon,
+} from "lucide-react";
+import { toast } from "react-hot-toast";
+import { ipToInt, clientsInNetwork, hostsFor } from "@/lib/networks";
 
-export default function RedesIPv4() {
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [redes, setRedes] = useState([
-    { id: 1, nombre: 'RED 15', red: '192.168.15.0', uso: '0.8%', detalleUso: '2 de 254', cidr: '24', router: 'CCR2004', tipo: 'ESTÁTICO' },
-    { id: 2, nombre: 'RED 60', red: '192.168.60.0', uso: '0.4%', detalleUso: '1 de 254', cidr: '24', router: 'CCR2004', tipo: 'ESTÁTICO' },
-    { id: 3, nombre: 'RED 5', red: '192.168.5.0', uso: '0.4%', detalleUso: '1 de 254', cidr: '24', router: 'CCR2004', tipo: 'ESTÁTICO' },
-    { id: 4, nombre: 'RED 100 FO', red: '100.10.10.0', uso: '0.8%', detalleUso: '2 de 254', cidr: '24', router: 'CCR2004', tipo: 'ESTÁTICO' },
-    { id: 5, nombre: 'RED 100.20 FO', red: '100.10.20.0', uso: '0.8%', detalleUso: '2 de 254', cidr: '24', router: 'CCR2004', tipo: 'ESTÁTICO' },
-  ]);
+export default function Networks() {
+  const [networks, setNetworks] = useState([]);
+  const [routers, setRouters] = useState([]);
+  const [clients, setClients] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(15);
+  const [sortKey, setSortKey] = useState("id");
+  const [sortDir, setSortDir] = useState("asc");
+  const [minimized, setMinimized] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [infoNet, setInfoNet] = useState(null);
+  const [treeNet, setTreeNet] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [nets, rts, cls] = await Promise.all([
+        base44.entities.Network.list("-created_date", 500),
+        base44.entities.Router.list(),
+        base44.entities.Client.list("-updated_date", 500),
+      ]);
+      setNetworks(nets);
+      setRouters(rts);
+      setClients(cls);
+    } catch {
+      toast.error("Error al cargar las redes");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const routerName = (id) => routers.find((r) => r.id === id)?.name || "—";
+
+  const sortBy = (key) => {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  };
+
+  const sortBtn = (key, label) => (
+    <button
+      onClick={() => sortBy(key)}
+      className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
+    >
+      {label}
+      {sortKey === key ? (
+        sortDir === "asc" ? (
+          <ArrowUp className="w-3 h-3" />
+        ) : (
+          <ArrowDown className="w-3 h-3" />
+        )
+      ) : (
+        <ArrowUpDown className="w-3 h-3 opacity-40" />
+      )}
+    </button>
+  );
+
+  const filtered = networks.filter((n) => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return n.name?.toLowerCase().includes(q) || n.network?.includes(q);
+  });
+
+  const sorted = [...filtered].sort((a, b) => {
+    const dir = sortDir === "asc" ? 1 : -1;
+    if (sortKey === "id")
+      return dir * (new Date(a.created_date) - new Date(b.created_date));
+    if (sortKey === "network")
+      return dir * (ipToInt(a.network) - ipToInt(b.network));
+    if (sortKey === "cidr") return dir * ((a.cidr || 0) - (b.cidr || 0));
+    return dir * String(a[sortKey] ?? "").localeCompare(String(b[sortKey] ?? ""));
+  });
+
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const effectivePage = Math.min(page, pages);
+  const startIdx = (effectivePage - 1) * pageSize;
+  const rows = sorted.slice(startIdx, startIdx + pageSize).map((n, i) => ({
+    ...n,
+    _seq: startIdx + i + 1,
+  }));
+
+  const pageWindow = [];
+  const winStart = Math.max(1, Math.min(effectivePage - 2, pages - 4));
+  for (let i = winStart; i <= Math.min(pages, winStart + 4); i++) pageWindow.push(i);
+
+  const from = filtered.length === 0 ? 0 : startIdx + 1;
+  const to = Math.min(startIdx + pageSize, filtered.length);
+
+  const remove = async (n) => {
+    if (!confirm(`¿Eliminar la red "${n.name}"?`)) return;
+    try {
+      await base44.entities.Network.delete(n.id);
+      toast.success("Red eliminada");
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.message || e.message);
+    }
+  };
 
   return (
-    <div className="p-4 bg-gray-100 min-h-screen">
-      {/* Cabecera de la sección */}
-      <div className="bg-blue-500 text-white px-4 py-3 rounded-t-lg flex justify-between items-center shadow">
-        <h1 className="text-lg font-bold">Redes IPv4</h1>
-        <div className="flex gap-2 text-white">
-          <button className="hover:bg-blue-600 p-1 rounded"><span className="material-icons">fullscreen</span></button>
-          <button className="hover:bg-blue-600 p-1 rounded"><span className="material-icons">refresh</span></button>
-          <button className="hover:bg-blue-600 p-1 rounded"><span className="material-icons">remove</span></button>
-        </div>
-      </div>
-
-      {/* Barra de herramientas superior */}
-      <div className="bg-white p-3 border-x border-gray-200 flex flex-wrap justify-between items-center gap-2 shadow-sm">
-        <div className="flex items-center gap-2">
-          <select className="border border-gray-300 rounded px-2 py-1 text-sm bg-white">
-            <option>15</option>
-            <option>30</option>
-            <option>50</option>
-          </select>
-          <button className="border border-gray-300 p-1.5 rounded bg-white hover:bg-gray-50 text-gray-600"><span className="material-icons text-sm">view_list</span></button>
-          <button className="border border-gray-300 p-1.5 rounded bg-white hover:bg-gray-50 text-gray-600"><span className="material-icons text-sm">grid_view</span></button>
-          <button 
-            onClick={() => setIsModalOpen(true)}
-            className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-1.5 rounded text-sm font-medium flex items-center gap-1 shadow"
-          >
-            + Nuevo
-          </button>
-        </div>
-        <div>
-          <input 
-            type="text" 
-            placeholder="Buscar..." 
-            className="border border-gray-300 rounded px-3 py-1.5 text-sm w-64 focus:outline-none focus:ring-1 focus:ring-blue-500"
-          />
-        </div>
-      </div>
-
-      {/* Tabla de registros */}
-      <div className="bg-white border border-gray-200 shadow-sm overflow-x-auto">
-        <table className="w-full text-left border-collapse text-sm">
-          <thead>
-            <tr className="bg-gray-50 text-gray-700 uppercase text-xs border-b border-gray-200">
-              <th className="p-3 border-r border-gray-200 cursor-pointer">ID ↕</th>
-              <th className="p-3 border-r border-gray-200 cursor-pointer">NOMBRE ↕</th>
-              <th className="p-3 border-r border-gray-200 cursor-pointer">RED ↕</th>
-              <th className="p-3 border-r border-gray-200 cursor-pointer">USO IPS ↕</th>
-              <th className="p-3 border-r border-gray-200 cursor-pointer">CIDR ↕</th>
-              <th className="p-3 border-r border-gray-200 cursor-pointer">ROUTER ↕</th>
-              <th className="p-3 border-r border-gray-200 cursor-pointer">TIPO ↕</th>
-              <th className="p-3 text-center">Acciones</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200 text-gray-800">
-            {redes.map((item) => (
-              <tr key={item.id} className="hover:bg-gray-50">
-                <td className="p-3 border-r border-gray-100">{item.id}</td>
-                <td className="p-3 border-r border-gray-100 font-medium">{item.nombre}</td>
-                <td className="p-3 border-r border-gray-100">{item.red}</td>
-                <td className="p-3 border-r border-gray-100">
-                  <div className="bg-gray-300 rounded overflow-hidden relative text-xs text-center text-white font-semibold">
-                    <div className="bg-blue-400 absolute top-0 left-0 bottom-0" style={{ width: item.uso }}></div>
-                    <span className="relative z-10 drop-shadow-sm text-gray-700">{item.uso} ({item.detalleUso})</span>
-                  </div>
-                </td>
-                <td className="p-3 border-r border-gray-100">{item.cidr}</td>
-                <td className="p-3 border-r border-gray-100">{item.router}</td>
-                <td className="p-3 border-r border-gray-100">
-                  <span className="bg-teal-600 text-white text-xs px-2.5 py-1 rounded font-semibold">{item.tipo}</span>
-                </td>
-                <td className="p-3 text-center flex justify-center gap-1.5">
-                  <button className="p-1 border border-gray-300 rounded hover:bg-gray-100 text-gray-600" title="Editar"><span className="material-icons text-sm">edit</span></button>
-                  <button className="p-1 border border-gray-300 rounded hover:bg-gray-100 text-gray-600" title="Info"><span className="material-icons text-sm">info</span></button>
-                  <button className="p-1 border border-gray-300 rounded hover:bg-gray-100 text-gray-600" title="Subredes"><span className="material-icons text-sm">account_tree</span></button>
-                  <button className="p-1 border border-gray-300 rounded hover:bg-gray-100 text-red-600" title="Eliminar"><span className="material-icons text-sm">delete</span></button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Paginación */}
-      <div className="bg-white p-3 border-x border-b border-gray-200 rounded-b-lg flex justify-between items-center text-sm text-gray-600 shadow-sm">
-        <div>Mostrando de 1 al 5 de un total de 5</div>
-        <div className="flex gap-1">
-          <button className="border border-gray-300 px-3 py-1 rounded bg-white hover:bg-gray-100 disabled:opacity-50">←</button>
-          <button className="border border-blue-500 bg-blue-500 text-white px-3 py-1 rounded">1</button>
-          <button className="border border-gray-300 px-3 py-1 rounded bg-white hover:bg-gray-100 disabled:opacity-50">→</button>
-        </div>
-      </div>
-
-      {/* Modal Nueva Red IPv4 */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-xl overflow-hidden">
-            <div className="flex justify-between items-center bg-white px-6 py-4 border-b border-gray-200">
-              <h3 className="text-lg font-semibold text-gray-800">Nueva Red IPv4</h3>
-              <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-600 font-bold text-xl">✕</button>
-            </div>
-            
-            <div className="p-6 space-y-4">
-              <div className="grid grid-cols-3 items-center gap-4">
-                <label className="text-right text-sm font-medium text-gray-700">Nombre</label>
-                <input type="text" placeholder="nombre de red" className="col-span-2 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" />
-              </div>
-
-              <div className="grid grid-cols-3 items-center gap-4">
-                <label className="text-right text-sm font-medium text-gray-700">Router</label>
-                <select className="col-span-2 border border-gray-300 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-blue-500">
-                  <option>Seleccionar...</option>
-                  <option>CCR2004</option>
-                </select>
-              </div>
-
-              <div className="grid grid-cols-3 items-center gap-4">
-                <label className="text-right text-sm font-medium text-gray-700">Red</label>
-                <div className="col-span-2 flex items-center border border-gray-300 rounded overflow-hidden focus-within:ring-1 focus-within:ring-blue-500">
-                  <span className="bg-gray-200 px-3 py-2 text-gray-600 border-r border-gray-300">🌐</span>
-                  <input type="text" placeholder="Ejm: 192.168.1.0" className="w-full px-3 py-2 text-sm focus:outline-none" />
-                </div>
-              </div>
-              <div className="grid grid-cols-3"><div className="col-start-2 col-span-2 text-xs text-gray-500">Ejm: 192.168.1.0</div></div>
-
-              <div className="grid grid-cols-3 items-center gap-4">
-                <label className="text-right text-sm font-medium text-gray-700">CIDR</label>
-                <select className="col-span-2 border border-gray-300 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-blue-500">
-                  <option>24 (255.255.255.0 - 254 hosts, 256 IP)</option>
-                  <option>30 (255.255.255.252 - 2 hosts, 4 IP)</option>
-                  <option>29 (255.255.255.248 - 6 hosts, 8 IP)</option>
-                </select>
-              </div>
-
-              <div className="grid grid-cols-3 items-center gap-4">
-                <label className="text-right text-sm font-medium text-gray-700">Tipo de Uso</label>
-                <select className="col-span-2 border border-gray-300 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-blue-500">
-                  <option>Seleccionar...</option>
-                  <option>Estático</option>
-                  <option>DHCP Pool</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="bg-gray-50 px-6 py-3 border-t border-gray-200 flex justify-end gap-2">
-              <button 
-                onClick={() => setIsModalOpen(false)}
-                className="border border-gray-300 bg-white hover:bg-gray-100 text-gray-700 px-4 py-1.5 rounded text-sm font-medium"
-              >
-                Cerrar
-              </button>
-              <button 
-                onClick={() => setIsModalOpen(false)}
-                className="bg-blue-500 hover:bg-blue-600 text-white px-5 py-1.5 rounded text-sm font-medium shadow"
-              >
-                Registrar
-              </button>
-            </div>
+    <Layout>
+      <Card className="overflow-hidden">
+        {/* Header */}
+        <div className="bg-info text-white px-4 py-3 flex items-center justify-between">
+          <h1 className="font-semibold flex items-center gap-2">
+            <RouterIcon className="w-4 h-4" />
+            Redes IPv4
+          </h1>
+          <div className="flex items-center gap-1">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="text-white hover:bg-white/10 h-8 w-8"
+              onClick={load}
+              title="Actualizar"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="text-white hover:bg-white/10 h-8 w-8"
+              onClick={() => setMinimized((m) => !m)}
+              title={minimized ? "Expandir" : "Minimizar"}
+            >
+              {minimized ? (
+                <Maximize2 className="w-4 h-4" />
+              ) : (
+                <Minimize2 className="w-4 h-4" />
+              )}
+            </Button>
           </div>
         </div>
-      )}
-    </div>
+
+        {!minimized && (
+          <>
+            {/* Barra de acciones */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 border-b bg-muted/30">
+              <div className="flex items-center gap-2">
+                <Select
+                  value={String(pageSize)}
+                  onValueChange={(v) => {
+                    setPageSize(Number(v));
+                    setPage(1);
+                  }}
+                >
+                  <SelectTrigger className="w-[72px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="15">15</SelectItem>
+                    <SelectItem value="25">25</SelectItem>
+                    <SelectItem value="50">50</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  className="bg-info hover:bg-info/90"
+                  onClick={() => {
+                    setEditing(null);
+                    setFormOpen(true);
+                  }}
+                >
+                  <Plus className="w-4 h-4" /> Nuevo
+                </Button>
+              </div>
+              <div className="relative w-full sm:w-64">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  className="pl-9 bg-background"
+                  placeholder="Buscar..."
+                  value={search}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    setPage(1);
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Tabla */}
+            {loading ? (
+              <div className="flex justify-center py-16">
+                <div className="w-8 h-8 border-4 border-slate-200 border-t-info rounded-full animate-spin" />
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="py-16 text-center">
+                <NetworkTreeIcon className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
+                <p className="font-medium">
+                  {search ? "Sin resultados" : "No hay redes registradas"}
+                </p>
+                {!search && (
+                  <Button
+                    className="mt-4 bg-info hover:bg-info/90"
+                    onClick={() => {
+                      setEditing(null);
+                      setFormOpen(true);
+                    }}
+                  >
+                    <Plus className="w-4 h-4" /> Nueva Red IPv4
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 text-muted-foreground text-xs uppercase">
+                    <tr>
+                      <th className="text-left font-medium px-4 py-3">
+                        {sortBtn("id", "ID")}
+                      </th>
+                      <th className="text-left font-medium px-4 py-3">
+                        {sortBtn("name", "Nombre")}
+                      </th>
+                      <th className="text-left font-medium px-4 py-3">
+                        {sortBtn("network", "Red")}
+                      </th>
+                      <th className="text-left font-medium px-4 py-3">Uso IPs</th>
+                      <th className="text-left font-medium px-4 py-3">
+                        {sortBtn("cidr", "CIDR")}
+                      </th>
+                      <th className="text-left font-medium px-4 py-3">Router</th>
+                      <th className="text-left font-medium px-4 py-3">Tipo</th>
+                      <th className="px-4 py-3"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((n) => {
+                      const used = clientsInNetwork(n, clients).length;
+                      const total = hostsFor(n.cidr || 24);
+                      const pct = total > 0 ? (used / total) * 100 : 0;
+                      return (
+                        <tr
+                          key={n.id}
+                          className="border-t border-border/50 hover:bg-muted/30"
+                        >
+                          <td className="px-4 py-3 text-muted-foreground">
+                            {n._seq}
+                          </td>
+                          <td className="px-4 py-3 font-medium">{n.name}</td>
+                          <td className="px-4 py-3 font-mono text-xs">
+                            {n.network}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <div className="w-20 h-1.5 bg-muted rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-info rounded-full"
+                                  style={{ width: `${Math.min(pct, 100)}%` }}
+                                />
+                              </div>
+                              <span className="text-xs text-muted-foreground whitespace-nowrap">
+                                {pct.toFixed(1)}% ({used} de {total})
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 font-mono text-xs">
+                            {n.cidr}
+                          </td>
+                          <td className="px-4 py-3 text-xs">
+                            {routerName(n.router_id)}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span
+                              className={`text-xs px-2 py-0.5 rounded-md font-medium ${
+                                n.type === "DHCP"
+                                  ? "bg-info/10 text-info"
+                                  : "bg-success/10 text-success"
+                              }`}
+                            >
+                              {n.type || "ESTÁTICO"}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center justify-end gap-1">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                title="Editar"
+                                onClick={() => {
+                                  setEditing(n);
+                                  setFormOpen(true);
+                                }}
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                title="Detalles"
+                                onClick={() => setInfoNet(n)}
+                              >
+                                <Info className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                title="Clientes en la red"
+                                onClick={() => setTreeNet(n)}
+                              >
+                                <NetworkTreeIcon className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                title="Eliminar"
+                                onClick={() => remove(n)}
+                              >
+                                <Trash2 className="w-4 h-4 text-destructive" />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Footer paginación */}
+            {!loading && filtered.length > 0 && (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-4 py-3 border-t text-xs text-muted-foreground">
+                <p>
+                  Mostrando de {from} al {to} de un total de {filtered.length}
+                </p>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-7 w-7"
+                    disabled={effectivePage <= 1}
+                    onClick={() => setPage(effectivePage - 1)}
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </Button>
+                  {pageWindow.map((p) => (
+                    <Button
+                      key={p}
+                      variant={p === effectivePage ? "default" : "outline"}
+                      size="icon"
+                      className={
+                        p === effectivePage
+                          ? "h-7 w-7 bg-info hover:bg-info/90"
+                          : "h-7 w-7"
+                      }
+                      onClick={() => setPage(p)}
+                    >
+                      {p}
+                    </Button>
+                  ))}
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-7 w-7"
+                    disabled={effectivePage >= pages}
+                    onClick={() => setPage(effectivePage + 1)}
+                  >
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </Card>
+
+      <NetworkForm
+        open={formOpen}
+        onClose={() => setFormOpen(false)}
+        onSaved={load}
+        network={editing}
+        routers={routers}
+      />
+
+      <NetworkInfoDialog
+        open={!!infoNet}
+        onClose={() => setInfoNet(null)}
+        network={infoNet}
+        mode="details"
+        routerName={infoNet ? routerName(infoNet.router_id) : ""}
+        usedClients={infoNet ? clientsInNetwork(infoNet, clients).length : 0}
+      />
+
+      <NetworkInfoDialog
+        open={!!treeNet}
+        onClose={() => setTreeNet(null)}
+        network={treeNet}
+        mode="clients"
+        clients={treeNet ? clientsInNetwork(treeNet, clients) : []}
+      />
+    </Layout>
   );
 }
