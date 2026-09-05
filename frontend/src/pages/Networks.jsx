@@ -1,18 +1,5 @@
-import { useEffect, useState } from "react";
-import { base44 } from "@/api/base44Client";
-import Layout from "@/components/Layout";
-import NetworkForm from "@/components/NetworkForm";
-import NetworkInfoDialog from "@/components/NetworkInfoDialog";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import React, { useState, useEffect, useMemo } from "react";
+import axios from "axios";
 import {
   Plus,
   Search,
@@ -21,417 +8,425 @@ import {
   Minimize2,
   Pencil,
   Info,
-  Network as NetworkTreeIcon,
+  Network,
   Trash2,
   ChevronLeft,
   ChevronRight,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
-  Router as RouterIcon,
+  X,
+  Server,
+  List,
+  Grid
 } from "lucide-react";
-import { toast } from "react-hot-toast";
-import { ipToInt, clientsInNetwork, hostsFor } from "@/lib/networks";
+
+// URL base de la API en tu servidor Debian
+const API_BASE_URL = process.env.REACT_APP_API_URL || "/api";
+
+// Opciones de CIDR con cálculo de hosts útiles
+const CIDR_OPTIONS = [
+  { cidr: 24, label: "24 (255.255.255.0 - 254 hosts, 256 IP)" },
+  { cidr: 25, label: "25 (255.255.255.128 - 126 hosts, 128 IP)" },
+  { cidr: 26, label: "26 (255.255.255.192 - 62 hosts, 64 IP)" },
+  { cidr: 27, label: "27 (255.255.255.224 - 30 hosts, 32 IP)" },
+  { cidr: 28, label: "28 (255.255.255.240 - 14 hosts, 16 IP)" },
+  { cidr: 29, label: "29 (255.255.255.248 - 6 hosts, 8 IP)" },
+  { cidr: 30, label: "30 (255.255.255.252 - 2 hosts, 4 IP)" },
+];
 
 export default function Networks() {
   const [networks, setNetworks] = useState([]);
   const [routers, setRouters] = useState([]);
-  const [clients, setClients] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(15);
-  const [sortKey, setSortKey] = useState("id");
-  const [sortDir, setSortDir] = useState("asc");
-  const [minimized, setMinimized] = useState(false);
-  const [formOpen, setFormOpen] = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [infoNet, setInfoNet] = useState(null);
-  const [treeNet, setTreeNet] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingNet, setEditingNet] = useState(null);
 
-  const load = async () => {
+  // Form State
+  const [formData, setFormData] = useState({
+    name: "",
+    router_id: "",
+    network: "",
+    cidr: 24,
+    type: "ESTÁTICO",
+  });
+
+  // Cargar datos del Backend Debian
+  const fetchData = async () => {
     setLoading(true);
     try {
-      const [nets, rts, cls] = await Promise.all([
-        base44.entities.Network.list("-created_date", 500),
-        base44.entities.Router.list(),
-        base44.entities.Client.list("-updated_date", 500),
+      const [netsRes, routersRes] = await Promise.all([
+        axios.get(`${API_BASE_URL}/networks`),
+        axios.get(`${API_BASE_URL}/routers`),
       ]);
-      setNetworks(nets);
-      setRouters(rts);
-      setClients(cls);
-    } catch {
-      toast.error("Error al cargar las redes");
+      setNetworks(netsRes.data || []);
+      setRouters(routersRes.data || []);
+    } catch (error) {
+      console.error("Error al obtener redes/routers:", error);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    load();
+    fetchData();
   }, []);
 
-  const routerName = (id) => routers.find((r) => r.id === id)?.name || "—";
+  // Filtrado y Paginación
+  const filteredNetworks = useMemo(() => {
+    return networks.filter(
+      (n) =>
+        n.name?.toLowerCase().includes(search.toLowerCase()) ||
+        n.network?.includes(search) ||
+        n.type?.toLowerCase().includes(search.toLowerCase())
+    );
+  }, [networks, search]);
 
-  const sortBy = (key) => {
-    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else {
-      setSortKey(key);
-      setSortDir("asc");
+  const totalPages = Math.ceil(filteredNetworks.length / pageSize) || 1;
+  const paginatedNetworks = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredNetworks.slice(start, start + pageSize);
+  }, [filteredNetworks, currentPage, pageSize]);
+
+  // Manejo de Modal (Abrir/Cerrar/Editar)
+  const openModal = (net = null) => {
+    if (net) {
+      setEditingNet(net);
+      setFormData({
+        name: net.name || "",
+        router_id: net.router_id || "",
+        network: net.network || "",
+        cidr: net.cidr || 24,
+        type: net.type || "ESTÁTICO",
+      });
+    } else {
+      setEditingNet(null);
+      setFormData({
+        name: "",
+        router_id: routers[0]?.id || "",
+        network: "",
+        cidr: 24,
+        type: "ESTÁTICO",
+      });
+    }
+    setIsModalOpen(true);
+  };
+
+  const closeModal = () => {
+    setIsModalOpen(false);
+    setEditingNet(null);
+  };
+
+  // Guardar / Actualizar Red
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      if (editingNet) {
+        await axios.put(`${API_BASE_URL}/networks/${editingNet.id}`, formData);
+      } else {
+        await axios.post(`${API_BASE_URL}/networks`, formData);
+      }
+      closeModal();
+      fetchData();
+    } catch (error) {
+      alert("Error al guardar la red: " + (error.response?.data?.message || error.message));
     }
   };
 
-  const sortBtn = (key, label) => (
-    <button
-      onClick={() => sortBy(key)}
-      className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
-    >
-      {label}
-      {sortKey === key ? (
-        sortDir === "asc" ? (
-          <ArrowUp className="w-3 h-3" />
-        ) : (
-          <ArrowDown className="w-3 h-3" />
-        )
-      ) : (
-        <ArrowUpDown className="w-3 h-3 opacity-40" />
-      )}
-    </button>
-  );
-
-  const filtered = networks.filter((n) => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return n.name?.toLowerCase().includes(q) || n.network?.includes(q);
-  });
-
-  const sorted = [...filtered].sort((a, b) => {
-    const dir = sortDir === "asc" ? 1 : -1;
-    if (sortKey === "id")
-      return dir * (new Date(a.created_date) - new Date(b.created_date));
-    if (sortKey === "network")
-      return dir * (ipToInt(a.network) - ipToInt(b.network));
-    if (sortKey === "cidr") return dir * ((a.cidr || 0) - (b.cidr || 0));
-    return dir * String(a[sortKey] ?? "").localeCompare(String(b[sortKey] ?? ""));
-  });
-
-  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const effectivePage = Math.min(page, pages);
-  const startIdx = (effectivePage - 1) * pageSize;
-  const rows = sorted.slice(startIdx, startIdx + pageSize).map((n, i) => ({
-    ...n,
-    _seq: startIdx + i + 1,
-  }));
-
-  const pageWindow = [];
-  const winStart = Math.max(1, Math.min(effectivePage - 2, pages - 4));
-  for (let i = winStart; i <= Math.min(pages, winStart + 4); i++) pageWindow.push(i);
-
-  const from = filtered.length === 0 ? 0 : startIdx + 1;
-  const to = Math.min(startIdx + pageSize, filtered.length);
-
-  const remove = async (n) => {
-    if (!confirm(`¿Eliminar la red "${n.name}"?`)) return;
-    try {
-      await base44.entities.Network.delete(n.id);
-      toast.success("Red eliminada");
-      load();
-    } catch (e) {
-      toast.error(e.response?.data?.message || e.message);
+  // Eliminar Red
+  const handleDelete = async (id, name) => {
+    if (window.confirm(`¿Está seguro de eliminar la red "${name}"?`)) {
+      try {
+        await axios.delete(`${API_BASE_URL}/networks/${id}`);
+        fetchData();
+      } catch (error) {
+        alert("Error al eliminar la red");
+      }
     }
+  };
+
+  // Ayudante para obtener el número de hosts según CIDR
+  const getHostsCount = (cidr) => {
+    const total = Math.pow(2, 32 - parseInt(cidr || 24));
+    return total > 2 ? total - 2 : total;
   };
 
   return (
-    <Layout>
-      <Card className="overflow-hidden">
-        {/* Header */}
-        <div className="bg-info text-white px-4 py-3 flex items-center justify-between">
-          <h1 className="font-semibold flex items-center gap-2">
-            <RouterIcon className="w-4 h-4" />
-            Redes IPv4
-          </h1>
-          <div className="flex items-center gap-1">
-            <Button
-              size="icon"
-              variant="ghost"
-              className="text-white hover:bg-white/10 h-8 w-8"
-              onClick={load}
-              title="Actualizar"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </Button>
-            <Button
-              size="icon"
-              variant="ghost"
-              className="text-white hover:bg-white/10 h-8 w-8"
-              onClick={() => setMinimized((m) => !m)}
-              title={minimized ? "Expandir" : "Minimizar"}
-            >
-              {minimized ? (
-                <Maximize2 className="w-4 h-4" />
-              ) : (
-                <Minimize2 className="w-4 h-4" />
-              )}
-            </Button>
+    <div className="w-full font-sans text-gray-700 bg-gray-100 min-h-screen p-4">
+      {/* Contenedor Principal */}
+      <div className="bg-white rounded-t shadow-sm border border-gray-200 overflow-hidden">
+        
+        {/* Cabecera Azul */}
+        <div className="bg-[#0267a5] text-white px-4 py-2.5 flex items-center justify-between">
+          <span className="font-medium text-sm">Redes IPv4</span>
+          <div className="flex items-center space-x-2 text-white/80">
+            <button className="hover:text-white" title="Maximizar"><Maximize2 size={15} /></button>
+            <button onClick={fetchData} className="hover:text-white" title="Recargar"><RefreshCw size={15} /></button>
+            <button className="hover:text-white" title="Minimizar"><Minimize2 size={15} /></button>
           </div>
         </div>
 
-        {!minimized && (
-          <>
-            {/* Barra de acciones */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 border-b bg-muted/30">
-              <div className="flex items-center gap-2">
-                <Select
-                  value={String(pageSize)}
-                  onValueChange={(v) => {
-                    setPageSize(Number(v));
-                    setPage(1);
-                  }}
-                >
-                  <SelectTrigger className="w-[72px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="15">15</SelectItem>
-                    <SelectItem value="25">25</SelectItem>
-                    <SelectItem value="50">50</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Button
-                  className="bg-info hover:bg-info/90"
-                  onClick={() => {
-                    setEditing(null);
-                    setFormOpen(true);
-                  }}
-                >
-                  <Plus className="w-4 h-4" /> Nuevo
-                </Button>
-              </div>
-              <div className="relative w-full sm:w-64">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  className="pl-9 bg-background"
-                  placeholder="Buscar..."
-                  value={search}
-                  onChange={(e) => {
-                    setSearch(e.target.value);
-                    setPage(1);
-                  }}
-                />
-              </div>
+        {/* Barra de Herramientas Superior */}
+        <div className="p-3 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center space-x-2">
+            <select
+              value={pageSize}
+              onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+              className="border border-gray-300 rounded px-2 py-1 text-xs bg-white text-gray-700 focus:outline-none"
+            >
+              <option value={15}>15</option>
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+            </select>
+            <button className="p-1.5 text-gray-600 hover:bg-gray-200 rounded border border-gray-300 bg-white">
+              <List size={14} />
+            </button>
+            <button className="p-1.5 text-gray-600 hover:bg-gray-200 rounded border border-gray-300 bg-white">
+              <Grid size={14} />
+            </button>
+            <button
+              onClick={() => openModal()}
+              className="bg-[#0267a5] hover:bg-[#02568a] text-white text-xs font-semibold px-3 py-1.5 rounded flex items-center gap-1 shadow-sm transition-colors"
+            >
+              <Plus size={14} /> Nuevo
+            </button>
+          </div>
+
+          <div className="w-full sm:w-64">
+            <input
+              type="text"
+              placeholder="Buscar..."
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setCurrentPage(1); }}
+              className="w-full border border-gray-300 rounded px-3 py-1 text-xs focus:outline-none focus:border-blue-500 bg-white"
+            />
+          </div>
+        </div>
+
+        {/* Tabla de Redes */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs text-left border-collapse">
+            <thead>
+              <tr className="bg-gray-100 text-gray-600 border-b border-gray-200 uppercase font-semibold">
+                <th className="p-2.5 w-12 border-r border-gray-200">ID</th>
+                <th className="p-2.5 border-r border-gray-200">NOMBRE</th>
+                <th className="p-2.5 border-r border-gray-200">RED</th>
+                <th className="p-2.5 border-r border-gray-200 w-64">USO IPS</th>
+                <th className="p-2.5 border-r border-gray-200 w-16">CIDR</th>
+                <th className="p-2.5 border-r border-gray-200">ROUTER</th>
+                <th className="p-2.5 border-r border-gray-200 w-24">TIPO</th>
+                <th className="p-2.5 text-center w-28">ACCIONES</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {loading ? (
+                <tr>
+                  <td colSpan="8" className="text-center py-8 text-gray-500">Cargando datos...</td>
+                </tr>
+              ) : paginatedNetworks.length === 0 ? (
+                <tr>
+                  <td colSpan="8" className="text-center py-8 text-gray-500">No hay redes IPv4 registradas.</td>
+                </tr>
+              ) : (
+                paginatedNetworks.map((net, index) => {
+                  const totalHosts = getHostsCount(net.cidr);
+                  const usedHosts = net.used_ips || 0;
+                  const percentage = ((usedHosts / totalHosts) * 100).toFixed(1);
+                  const router = routers.find((r) => r.id === net.router_id);
+
+                  return (
+                    <tr key={net.id || index} className="hover:bg-gray-50 transition-colors">
+                      <td className="p-2.5 border-r border-gray-200 text-gray-500">{net.id || index + 1}</td>
+                      <td className="p-2.5 border-r border-gray-200 font-medium text-gray-800">{net.name}</td>
+                      <td className="p-2.5 border-r border-gray-200 font-mono text-gray-700">{net.network}</td>
+                      <td className="p-2.5 border-r border-gray-200">
+                        {/* Barra de Progreso de IPs */}
+                        <div className="relative w-full bg-gray-300 rounded-full h-4 overflow-hidden border border-gray-300">
+                          <div
+                            className="bg-gray-500 h-full transition-all duration-300"
+                            style={{ width: `${Math.min(percentage, 100)}%` }}
+                          />
+                          <span className="absolute inset-0 flex items-center justify-center text-[10px] text-white font-medium drop-shadow">
+                            {percentage}% ({usedHosts} de {totalHosts})
+                          </span>
+                        </div>
+                      </td>
+                      <td className="p-2.5 border-r border-gray-200">{net.cidr}</td>
+                      <td className="p-2.5 border-r border-gray-200">{router ? router.name : net.router_name || "CCR2004"}</td>
+                      <td className="p-2.5 border-r border-gray-200">
+                        <span className="bg-[#007a87] text-white text-[10px] px-2 py-0.5 rounded font-semibold uppercase">
+                          {net.type || "ESTÁTICO"}
+                        </span>
+                      </td>
+                      <td className="p-2.5 text-center">
+                        <div className="flex items-center justify-center space-x-1.5 text-gray-600">
+                          <button onClick={() => openModal(net)} className="hover:text-blue-600" title="Editar"><Pencil size={14} /></button>
+                          <button className="hover:text-blue-600" title="Información"><Info size={14} /></button>
+                          <button className="hover:text-blue-600" title="Arbol de Clientes"><Network size={14} /></button>
+                          <button onClick={() => handleDelete(net.id, net.name)} className="hover:text-red-600" title="Eliminar"><Trash2 size={14} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Paginador Footer */}
+        <div className="p-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
+          <div>
+            Mostrando de {filteredNetworks.length > 0 ? (currentPage - 1) * pageSize + 1 : 0} al{" "}
+            {Math.min(currentPage * pageSize, filteredNetworks.length)} de un total de {filteredNetworks.length}
+          </div>
+          <div className="flex items-center space-x-1">
+            <button
+              disabled={currentPage === 1}
+              onClick={() => setCurrentPage((p) => p - 1)}
+              className="p-1 border border-gray-300 bg-white rounded disabled:opacity-40"
+            >
+              <ChevronLeft size={14} />
+            </button>
+            <span className="bg-[#0267a5] text-white px-2.5 py-1 rounded font-medium">{currentPage}</span>
+            <button
+              disabled={currentPage === totalPages}
+              onClick={() => setCurrentPage((p) => p + 1)}
+              className="p-1 border border-gray-300 bg-white rounded disabled:opacity-40"
+            >
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Modal Nueva / Editar Red IPv4 */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden animate-fadeIn">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+              <h3 className="text-sm font-semibold text-gray-700">
+                {editingNet ? "Editar Red IPv4" : "Nueva Red IPv4"}
+              </h3>
+              <button onClick={closeModal} className="text-gray-400 hover:text-gray-600">
+                <X size={16} />
+              </button>
             </div>
 
-            {/* Tabla */}
-            {loading ? (
-              <div className="flex justify-center py-16">
-                <div className="w-8 h-8 border-4 border-slate-200 border-t-info rounded-full animate-spin" />
-              </div>
-            ) : filtered.length === 0 ? (
-              <div className="py-16 text-center">
-                <NetworkTreeIcon className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
-                <p className="font-medium">
-                  {search ? "Sin resultados" : "No hay redes registradas"}
-                </p>
-                {!search && (
-                  <Button
-                    className="mt-4 bg-info hover:bg-info/90"
-                    onClick={() => {
-                      setEditing(null);
-                      setFormOpen(true);
-                    }}
-                  >
-                    <Plus className="w-4 h-4" /> Nueva Red IPv4
-                  </Button>
-                )}
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-muted/50 text-muted-foreground text-xs uppercase">
-                    <tr>
-                      <th className="text-left font-medium px-4 py-3">
-                        {sortBtn("id", "ID")}
-                      </th>
-                      <th className="text-left font-medium px-4 py-3">
-                        {sortBtn("name", "Nombre")}
-                      </th>
-                      <th className="text-left font-medium px-4 py-3">
-                        {sortBtn("network", "Red")}
-                      </th>
-                      <th className="text-left font-medium px-4 py-3">Uso IPs</th>
-                      <th className="text-left font-medium px-4 py-3">
-                        {sortBtn("cidr", "CIDR")}
-                      </th>
-                      <th className="text-left font-medium px-4 py-3">Router</th>
-                      <th className="text-left font-medium px-4 py-3">Tipo</th>
-                      <th className="px-4 py-3"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((n) => {
-                      const used = clientsInNetwork(n, clients).length;
-                      const total = hostsFor(n.cidr || 24);
-                      const pct = total > 0 ? (used / total) * 100 : 0;
-                      return (
-                        <tr
-                          key={n.id}
-                          className="border-t border-border/50 hover:bg-muted/30"
-                        >
-                          <td className="px-4 py-3 text-muted-foreground">
-                            {n._seq}
-                          </td>
-                          <td className="px-4 py-3 font-medium">{n.name}</td>
-                          <td className="px-4 py-3 font-mono text-xs">
-                            {n.network}
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <div className="w-20 h-1.5 bg-muted rounded-full overflow-hidden">
-                                <div
-                                  className="h-full bg-info rounded-full"
-                                  style={{ width: `${Math.min(pct, 100)}%` }}
-                                />
-                              </div>
-                              <span className="text-xs text-muted-foreground whitespace-nowrap">
-                                {pct.toFixed(1)}% ({used} de {total})
-                              </span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 font-mono text-xs">
-                            {n.cidr}
-                          </td>
-                          <td className="px-4 py-3 text-xs">
-                            {routerName(n.router_id)}
-                          </td>
-                          <td className="px-4 py-3">
-                            <span
-                              className={`text-xs px-2 py-0.5 rounded-md font-medium ${
-                                n.type === "DHCP"
-                                  ? "bg-info/10 text-info"
-                                  : "bg-success/10 text-success"
-                              }`}
-                            >
-                              {n.type || "ESTÁTICO"}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center justify-end gap-1">
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                title="Editar"
-                                onClick={() => {
-                                  setEditing(n);
-                                  setFormOpen(true);
-                                }}
-                              >
-                                <Pencil className="w-4 h-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                title="Detalles"
-                                onClick={() => setInfoNet(n)}
-                              >
-                                <Info className="w-4 h-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                title="Clientes en la red"
-                                onClick={() => setTreeNet(n)}
-                              >
-                                <NetworkTreeIcon className="w-4 h-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                title="Eliminar"
-                                onClick={() => remove(n)}
-                              >
-                                <Trash2 className="w-4 h-4 text-destructive" />
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            {/* Modal Form */}
+            <form onSubmit={handleSubmit}>
+              <div className="p-5 space-y-4 text-xs">
+                {/* Campo Nombre */}
+                <div className="grid grid-cols-3 items-center gap-2">
+                  <label className="text-right text-gray-600 font-medium">Nombre</label>
+                  <div className="col-span-2">
+                    <input
+                      type="text"
+                      placeholder="nombre de red"
+                      required
+                      value={formData.name}
+                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      className="w-full border border-gray-300 rounded px-2.5 py-1.5 focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                </div>
 
-            {/* Footer paginación */}
-            {!loading && filtered.length > 0 && (
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-4 py-3 border-t text-xs text-muted-foreground">
-                <p>
-                  Mostrando de {from} al {to} de un total de {filtered.length}
-                </p>
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="h-7 w-7"
-                    disabled={effectivePage <= 1}
-                    onClick={() => setPage(effectivePage - 1)}
-                  >
-                    <ChevronLeft className="w-3.5 h-3.5" />
-                  </Button>
-                  {pageWindow.map((p) => (
-                    <Button
-                      key={p}
-                      variant={p === effectivePage ? "default" : "outline"}
-                      size="icon"
-                      className={
-                        p === effectivePage
-                          ? "h-7 w-7 bg-info hover:bg-info/90"
-                          : "h-7 w-7"
-                      }
-                      onClick={() => setPage(p)}
+                {/* Campo Router */}
+                <div className="grid grid-cols-3 items-center gap-2">
+                  <label className="text-right text-gray-600 font-medium">Router</label>
+                  <div className="col-span-2">
+                    <select
+                      value={formData.router_id}
+                      onChange={(e) => setFormData({ ...formData, router_id: e.target.value })}
+                      className="w-full border border-gray-300 rounded px-2.5 py-1.5 bg-white text-gray-700 focus:outline-none focus:border-blue-500"
                     >
-                      {p}
-                    </Button>
-                  ))}
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="h-7 w-7"
-                    disabled={effectivePage >= pages}
-                    onClick={() => setPage(effectivePage + 1)}
-                  >
-                    <ChevronRight className="w-3.5 h-3.5" />
-                  </Button>
+                      <option value="">Seleccionar...</option>
+                      {routers.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Campo Red con Icono */}
+                <div className="grid grid-cols-3 items-start gap-2">
+                  <label className="text-right text-gray-600 font-medium pt-1.5">Red</label>
+                  <div className="col-span-2">
+                    <div className="flex rounded border border-gray-300 overflow-hidden focus-within:border-blue-500">
+                      <span className="bg-gray-100 p-1.5 text-gray-500 flex items-center justify-center border-r border-gray-300">
+                        <Network size={14} />
+                      </span>
+                      <input
+                        type="text"
+                        placeholder="Ejm: 192.168.1.0"
+                        required
+                        value={formData.network}
+                        onChange={(e) => setFormData({ ...formData, network: e.target.value })}
+                        className="w-full px-2 py-1.5 focus:outline-none"
+                      />
+                    </div>
+                    <span className="text-[10px] text-gray-400 mt-1 block">Ejm: 192.168.1.0</span>
+                  </div>
+                </div>
+
+                {/* Campo CIDR */}
+                <div className="grid grid-cols-3 items-center gap-2">
+                  <label className="text-right text-gray-600 font-medium">CIDR</label>
+                  <div className="col-span-2">
+                    <select
+                      value={formData.cidr}
+                      onChange={(e) => setFormData({ ...formData, cidr: Number(e.target.value) })}
+                      className="w-full border border-gray-300 rounded px-2.5 py-1.5 bg-white text-gray-700 focus:outline-none focus:border-blue-500"
+                    >
+                      {CIDR_OPTIONS.map((opt) => (
+                        <option key={opt.cidr} value={opt.cidr}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Campo Tipo de Uso */}
+                <div className="grid grid-cols-3 items-center gap-2">
+                  <label className="text-right text-gray-600 font-medium">Tipo de Uso</label>
+                  <div className="col-span-2">
+                    <select
+                      value={formData.type}
+                      onChange={(e) => setFormData({ ...formData, type: e.target.value })}
+                      className="w-full border border-gray-300 rounded px-2.5 py-1.5 bg-white text-gray-700 focus:outline-none focus:border-blue-500"
+                    >
+                      <option value="ESTÁTICO">ESTÁTICO</option>
+                      <option value="DHCP">DHCP</option>
+                      <option value="PPPOE">PPPoE</option>
+                    </select>
+                  </div>
                 </div>
               </div>
-            )}
-          </>
-        )}
-      </Card>
 
-      <NetworkForm
-        open={formOpen}
-        onClose={() => setFormOpen(false)}
-        onSaved={load}
-        network={editing}
-        routers={routers}
-      />
-
-      <NetworkInfoDialog
-        open={!!infoNet}
-        onClose={() => setInfoNet(null)}
-        network={infoNet}
-        mode="details"
-        routerName={infoNet ? routerName(infoNet.router_id) : ""}
-        usedClients={infoNet ? clientsInNetwork(infoNet, clients).length : 0}
-      />
-
-      <NetworkInfoDialog
-        open={!!treeNet}
-        onClose={() => setTreeNet(null)}
-        network={treeNet}
-        mode="clients"
-        clients={treeNet ? clientsInNetwork(treeNet, clients) : []}
-      />
-    </Layout>
+              {/* Modal Footer */}
+              <div className="bg-gray-50 px-4 py-3 border-t border-gray-200 flex justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  className="bg-white border border-gray-300 text-gray-700 px-4 py-1.5 rounded hover:bg-gray-100 font-medium"
+                >
+                  Cerrar
+                </button>
+                <button
+                  type="submit"
+                  className="bg-[#52a3ff] hover:bg-[#3d92f5] text-white px-5 py-1.5 rounded font-medium shadow-sm transition-colors"
+                >
+                  Registrar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
