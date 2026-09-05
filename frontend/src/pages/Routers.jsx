@@ -64,7 +64,18 @@ export default function Routers() {
     setSyncError(null);
     try {
       const res = await api.routers.sync(id);
-      if (res?.error) setSyncError(`Router ${id}: ${res.error}`);
+      if (res?.error) {
+        setSyncError(`Router ${id}: ${res.error}`);
+      } else if (res?.model) {
+        // Actualizar modelo y versión inmediatamente en el estado React
+        setRouters((prev) =>
+          prev.map((r) =>
+            r.id === id
+              ? { ...r, model: res.model, ros_version: res.ros_version || r.ros_version, status: 'online' }
+              : r
+          )
+        );
+      }
       await load();
     } catch (e) {
       setSyncError(`Router ${id}: ${e.message}`);
@@ -79,6 +90,17 @@ export default function Routers() {
     try {
       const res = await api.routers.test(id);
       setDiag(res);
+      
+      // Actualizar modelo en vivo desde el diagnóstico si la API tuvo éxito
+      if (res?.api?.ok && res?.api?.board && res?.api?.board !== 'Desconocido') {
+        setRouters((prev) =>
+          prev.map((r) =>
+            r.id === id
+              ? { ...r, model: res.api.board, ros_version: res.api.version || r.ros_version }
+              : r
+          )
+        );
+      }
     } catch (e) {
       setDiag({ tcp: { ok: false, error: e.message }, api: { ok: false, error: e.message } });
     }
@@ -122,17 +144,6 @@ export default function Routers() {
             </div>
             <div className="flex gap-2"><span className="text-slate-500 w-28">Hora servidor:</span><span className="font-mono text-slate-600 text-xs">{diag.server_time}</span></div>
           </div>
-          {diag.tcp?.ok && !diag.api?.ok && (
-            <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
-              <strong>El puerto TCP está abierto pero el login API falló.</strong> Causas comunes:
-              <ul className="list-disc list-inside mt-1 space-y-0.5">
-                <li>El puerto <strong>{diag.port}</strong> no es el puerto API de MikroTik (debe ser <strong>8728</strong> sin TLS o <strong>8729</strong> con TLS)</li>
-                <li>TLS está {diag.use_tls ? 'activado' : 'desactivado'} — verifica que coincida con la configuración del router</li>
-                <li>Usuario o contraseña incorrectos</li>
-                <li>El servicio API no está habilitado en MikroTik (IP → Services → api)</li>
-              </ul>
-            </div>
-          )}
         </div>
       )}
 
@@ -161,47 +172,51 @@ export default function Routers() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {routers.map((r, idx) => (
-                <tr key={r.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-4 py-3.5 text-sm text-slate-400">{idx + 1}</td>
-                  <td className="px-4 py-3.5">
-                    <button onClick={() => navigate(`/routers/${r.id}/edit`)} className="text-sm font-medium text-[#007BFF] hover:underline">
-                      {r.name}
-                    </button>
-                    <p className="text-xs text-[#f39c12] mt-0.5">API + {speedLabels[r.speed_control] || 'Colas Simples'}</p>
-                  </td>
-                  <td className="px-4 py-3.5 text-sm text-slate-600">{r.host}</td>
-                  <td className="px-4 py-3.5 text-sm text-slate-600">{r.model || '—'}</td>
-                  <td className="px-4 py-3.5 text-sm text-slate-600">{r.ros_version || '—'}</td>
-                  <td className="px-4 py-3.5 text-center">
-                    <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-slate-200 text-slate-600 text-xs font-medium">
-                      {clientCounts[r.id] || 0}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3.5 text-center">
-                    <StatusBadge status={r.status} syncing={syncing === r.id} />
-                  </td>
-                  <td className="px-4 py-3.5">
-                    <div className="flex items-center justify-center gap-1">
-                      <button onClick={() => sync(r.id)} disabled={syncing === r.id} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 disabled:opacity-50 transition-colors" title="Sincronizar">
-                        <RefreshCw className={`w-4 h-4 ${syncing === r.id ? 'animate-spin' : ''}`} />
+              {routers.map((r, idx) => {
+                // Selecciona el primer campo disponible para evitar que se renderice '—'
+                const displayModel = r.model || r.board_model || r.board || r.board_name || '—';
+                return (
+                  <tr key={r.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-4 py-3.5 text-sm text-slate-400">{idx + 1}</td>
+                    <td className="px-4 py-3.5">
+                      <button onClick={() => navigate(`/routers/${r.id}/edit`)} className="text-sm font-medium text-[#007BFF] hover:underline">
+                        {r.name}
                       </button>
-                      <button onClick={() => testDiag(r.id)} disabled={testing === r.id} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 disabled:opacity-50 transition-colors" title="Diagnóstico TCP">
-                        <Stethoscope className={`w-4 h-4 ${testing === r.id ? 'animate-pulse' : ''}`} />
-                      </button>
-                      <button onClick={() => navigate(`/routers/${r.id}/edit`)} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 transition-colors" title="Editar">
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => navigate('/clients')} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 transition-colors" title="Clientes">
-                        <Users className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => remove(r.id)} className="p-1.5 rounded-md text-rose-500 hover:bg-rose-50 transition-colors" title="Eliminar">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                      <p className="text-xs text-[#f39c12] mt-0.5">API + {speedLabels[r.speed_control] || 'Colas Simples'}</p>
+                    </td>
+                    <td className="px-4 py-3.5 text-sm text-slate-600">{r.host}</td>
+                    <td className="px-4 py-3.5 text-sm font-medium text-slate-700">{displayModel}</td>
+                    <td className="px-4 py-3.5 text-sm text-slate-600">{r.ros_version || '—'}</td>
+                    <td className="px-4 py-3.5 text-center">
+                      <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-slate-200 text-slate-600 text-xs font-medium">
+                        {clientCounts[r.id] || 0}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3.5 text-center">
+                      <StatusBadge status={r.status} syncing={syncing === r.id} />
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="flex items-center justify-center gap-1">
+                        <button onClick={() => sync(r.id)} disabled={syncing === r.id} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 disabled:opacity-50 transition-colors" title="Sincronizar">
+                          <RefreshCw className={`w-4 h-4 ${syncing === r.id ? 'animate-spin' : ''}`} />
+                        </button>
+                        <button onClick={() => testDiag(r.id)} disabled={testing === r.id} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 disabled:opacity-50 transition-colors" title="Diagnóstico TCP">
+                          <Stethoscope className={`w-4 h-4 ${testing === r.id ? 'animate-pulse' : ''}`} />
+                        </button>
+                        <button onClick={() => navigate(`/routers/${r.id}/edit`)} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 transition-colors" title="Editar">
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => navigate('/clients')} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 transition-colors" title="Clientes">
+                          <Users className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => remove(r.id)} className="p-1.5 rounded-md text-rose-500 hover:bg-rose-50 transition-colors" title="Eliminar">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
